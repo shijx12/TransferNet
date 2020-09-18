@@ -38,11 +38,21 @@ def encode_kb(args, vocab):
         Mrel.append([idx, r_inv_id])
         idx += 1
         
+    # self relation
+    r = '<SELF_REL>'
+    add_item_to_x2id(r, vocab['relation2id'])
+    r_id = vocab['relation2id'][r]
+    for i in vocab['entity2id'].values():
+        Msubj.append([idx, i])
+        Mobj.append([idx, i])
+        Mrel.append([idx, r_id])
+        idx += 1
+
 
     Tsize = len(Msubj)
-    assert Tsize == len(kb) * 2
     Esize = len(vocab['entity2id'])
     Rsize = len(vocab['relation2id'])
+    assert Tsize == len(kb) * 2 + Esize
     Msubj = np.array(Msubj, dtype = np.int32)
     Mobj = np.array(Mobj, dtype = np.int32)
     Mrel = np.array(Mrel, dtype = np.int32)
