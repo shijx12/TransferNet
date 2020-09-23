@@ -4,8 +4,9 @@ import pickle
 from collections import defaultdict
 import torch
 import torch.nn as nn
-from utils import *
+from utils.misc import *
 import numpy as np
+
 class KnowledgeGraph(nn.Module):
     def __init__(self, args, vocab):
         super(KnowledgeGraph, self).__init__()

@@ -1,7 +1,7 @@
 import json
 import pickle
 import torch
-from utils import invert_dict
+from utils.misc import invert_dict
 
 
 def load_vocab(path):
@@ -13,13 +13,14 @@ def load_vocab(path):
 
 def collate(batch):
     batch = list(zip(*batch))
-    question, topic_entity, answer = list(map(torch.stack, batch))
-    return question, topic_entity, answer
+    question, topic_entity, answer = list(map(torch.stack, batch[:3]))
+    hop = batch[3]
+    return question, topic_entity, answer, hop
 
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs):
-        self.questions, self.topic_entities, self.answers = inputs
+        self.questions, self.topic_entities, self.answers, self.hops = inputs
         # print(self.questions.shape)
         # print(self.topic_entities.shape)
         # print(self.answers.shape)
@@ -28,7 +29,8 @@ class Dataset(torch.utils.data.Dataset):
         question = torch.LongTensor(self.questions[index])
         topic_entity = torch.LongTensor(self.topic_entities[index])
         answer = torch.LongTensor(self.answers[index])
-        return question, topic_entity, answer
+        hop = self.hops[index]
+        return question, topic_entity, answer, hop
 
 
     def __len__(self):
@@ -41,7 +43,7 @@ class DataLoader(torch.utils.data.DataLoader):
         
         inputs = []
         with open(question_pt, 'rb') as f:
-            for _ in range(3):
+            for _ in range(4):
                 inputs.append(pickle.load(f))
         dataset = Dataset(inputs)
 

@@ -6,10 +6,10 @@ import argparse
 import shutil
 from tqdm import tqdm
 import time
-from utils import MetricLogger, load_glove, idx_to_one_hot, UseStyle, RAdam
-from data import DataLoader
-from model import TransferNet
-from predict import validate
+from utils.misc import MetricLogger, load_glove, idx_to_one_hot, UseStyle, RAdam
+from .data import DataLoader
+from .model import TransferNet
+from .predict import validate
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
 logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
@@ -58,6 +58,7 @@ def train(args):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max')
 
     meters = MetricLogger(delimiter="  ")
+    # validate(args, model, val_loader, device)
     logging.info("Start training........")
 
     for epoch in range(args.num_epoch):
@@ -65,18 +66,23 @@ def train(args):
         for iteration, batch in enumerate(train_loader):
             iteration = iteration + 1
 
-            question, topic_entity, answer = batch
+            question, topic_entity, answer, hop = batch
             question = question.to(device)
             topic_entity = idx_to_one_hot(topic_entity, len(vocab['entity2id'])).to(device)
             answer = idx_to_one_hot(answer, len(vocab['entity2id'])).to(device)
             answer[:, 0] = 0
             loss = model(question, topic_entity, answer)
             optimizer.zero_grad()
-            loss.backward()
+            if isinstance(loss, dict):
+                total_loss = sum(loss.values())
+                meters.update(**{k:v.item() for k,v in loss.items()})
+            else:
+                total_loss = loss
+                meters.update(loss=loss.item())
+            total_loss.backward()
             nn.utils.clip_grad_value_(model.parameters(), 0.5)
             nn.utils.clip_grad_norm_(model.parameters(), 2)
             optimizer.step()
-            meters.update(loss=loss.item())
 
             if iteration % (len(train_loader) // 100) == 0:
             # if True:
@@ -96,7 +102,8 @@ def train(args):
                 )
         
         acc = validate(args, model, val_loader, device)
-        scheduler.step(acc['e_score'])
+        logging.info(acc)
+        scheduler.step(acc['score-all'])
         torch.save(model.state_dict(), os.path.join(args.save_dir, 'model.pt'))
         
 
@@ -110,7 +117,7 @@ def main():
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--weight_decay', default=1e-5, type=float)
-    parser.add_argument('--num_epoch', default=60, type=int)
+    parser.add_argument('--num_epoch', default=3, type=int)
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--eval_batch_size', default = 64, type = int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')

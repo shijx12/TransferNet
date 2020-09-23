@@ -8,7 +8,7 @@ import collections
 from collections import Counter
 from itertools import chain
 from tqdm import tqdm
-from utils import *
+from utils.misc import *
 import re
 
 
@@ -89,7 +89,7 @@ def encode_qa(args, vocab):
                     assert topic_entity in vocab['entity2id']
                     for answer in answers:
                         assert answer in vocab['entity2id']
-                    data.append({'question':question, 'topic_entity':topic_entity, 'answers':answers, 'hop':hop})
+                    data.append({'question':question, 'topic_entity':topic_entity, 'answers':answers, 'hop':int(hop[0])})
         datasets.append(data)
         json.dump(data, open(os.path.join(args.output_dir, '%s.json'%(dataset)), 'w'))
 
@@ -116,7 +116,7 @@ def encode_qa(args, vocab):
     for name, dataset in zip(('train', 'val', 'test'), (train_set, val_set, test_set)):
         print('Encode {} set'.format(name))
         outputs = encode_dataset(vocab, dataset)
-        print('shape of questions, topic_entities, answers:')
+        print('shape of questions, topic_entities, answers, hops:')
         with open(os.path.join(args.output_dir, '{}.pt'.format(name)), 'wb') as f:
             for o in outputs:
                 print(o.shape)
@@ -126,11 +126,13 @@ def encode_dataset(vocab, dataset):
     questions = []
     topic_entities = []
     answers = []
+    hops = []
     for qa in tqdm(dataset):
         assert len(qa['topic_entity']) > 0
         questions.append([vocab['word2id'].get(w, vocab['word2id']['<UNK>']) for w in word_tokenize(qa['question'].lower())])
         topic_entities.append([vocab['entity2id'][qa['topic_entity']]])
         answers.append([vocab['entity2id'][answer] for answer in qa['answers']])
+        hops.append(qa['hop'])
         
     # question padding
     max_len = max(len(q) for q in questions)
@@ -146,7 +148,8 @@ def encode_dataset(vocab, dataset):
         while len(a) < max_len:
             a.append(DUMMY_ENTITY_ID)
     answers = np.asarray(answers, dtype=np.int32)
-    return questions, topic_entities, answers
+    hops = np.asarray(hops, dtype=np.int8)
+    return questions, topic_entities, answers, hops
 
 def main():
     parser = argparse.ArgumentParser()

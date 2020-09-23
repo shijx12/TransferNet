@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
+import math
 
-from BiGRU import GRU, BiGRU
-from Knowledge_graph import KnowledgeGraph
+from utils.BiGRU import GRU, BiGRU
+from .Knowledge_graph import KnowledgeGraph
 
 class TransferNet(nn.Module):
     def __init__(self, args, dim_word, dim_hidden, vocab):
@@ -30,11 +31,12 @@ class TransferNet(nn.Module):
         self.rel_classifier = nn.Linear(dim_hidden, num_relations)
         self.cq_linear = nn.Linear(2 * dim_hidden, dim_hidden)
         self.ca_linear = nn.Linear(dim_hidden, 1)
-        self.ent_classifier = nn.Sequential(
-                nn.Linear(dim_hidden, 1024),
-                nn.ReLU(),
-                nn.Linear(1024, num_entities),
-            )
+
+
+        self.entity_embeddings = nn.Parameter(torch.FloatTensor(num_entities, dim_hidden))
+        self.entity_bias = nn.Parameter(torch.FloatTensor(num_entities))
+        nn.init.normal_(self.entity_embeddings, mean=0, std=1/math.sqrt(dim_hidden))
+        self.entity_bias.data.zero_()
 
         for m in self.modules():
             if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
@@ -79,7 +81,7 @@ class TransferNet(nn.Module):
             z = (m * last_e + (1-m)).detach()
             last_e = last_e / z
 
-            # reshape cycle entities to 0, because A-r->B-r_inv->A is not allowed in MetaQA
+            # Specifically for MetaQA: reshape cycle entities to 0, because A-r->B-r_inv->A is not allowed
             if t > 0:
                 prev_rel = torch.argmax(rel_probs[-2], dim=1)
                 curr_rel = torch.argmax(rel_probs[-1], dim=1)
@@ -89,6 +91,15 @@ class TransferNet(nn.Module):
                 m[(torch.abs(prev_rel-curr_rel)==1) & (torch.remainder(torch.min(prev_rel,curr_rel),2)==0)] = 1
                 ent_m = m.float() * prev_prev_ent_prob.gt(0.9).float()
                 last_e = (1-ent_m) * last_e
+
+            # Specifically for MetaQA: for 2-hop questions, topic entity is excluded from answer
+            if t == self.num_steps-1:
+                stack_rel_probs = torch.stack(rel_probs, dim=1) # [bsz, num_step, num_rel]
+                stack_rel = torch.argmax(stack_rel_probs, dim=2) # [bsz, num_step]
+                num_self = stack_rel.eq(self.vocab['relation2id']['<SELF_REL>']).long().sum(dim=1) # [bsz,]
+                m = num_self.eq(1).float().unsqueeze(1) * e_s
+                last_e = (1-m) * last_e
+
             ent_probs.append(last_e.detach())
         return {
             'last_e': last_e,
@@ -103,11 +114,12 @@ class TransferNet(nn.Module):
         q_word_h, q_embeddings, q_hn = self.question_encoder(q_word_emb, question_lens) # [bsz, max_q, dim_h], [bsz, dim_h], [num_layers, bsz, dim_h]
 
         outputs = self.transfer(q_word_h, q_embeddings, e_s) # [bsz, num_entities]
-        
+
         e_score = outputs['last_e']
         normed_e_score = e_score / (e_score.sum(1, True) + 1e-6) # [bsz, num_entities]
-        pred_e = normed_e_score @ self.kg.entity_embeddings.weight # [bsz, dim_hidden]
-        pred_e = self.ent_classifier(pred_e) # [bsz, num_entities]
+        # detach e_score, so we just learn the classifier by cross entropy loss
+        pred_e = normed_e_score.detach() @ self.entity_embeddings # [bsz, dim_hidden]
+        pred_e = pred_e @ self.entity_embeddings.t() + self.entity_bias.unsqueeze(0) # [bsz, num_entities]
 
         if answers is None:
             return {
@@ -118,12 +130,14 @@ class TransferNet(nn.Module):
                 'ent_probs': outputs['ent_probs']
             }
         # CrossEntropy with most possible entity
-        # pos_pred_e = pred_e * answers
-        # _, idx = pos_pred_e.max(1) # [bsz]
-        # loss = nn.CrossEntropyLoss()(pred_e, idx)
+        pos_pred_e = pred_e * answers
+        idx = torch.argmax(pos_pred_e, 1) # [bsz]
+        if (idx==0).sum().item() > 0:
+            idx[idx==0] = torch.argmax(answers[idx==0], 1)
+        loss_prob = nn.CrossEntropyLoss()(pred_e, idx)
 
-        # distance loss
+        # Distance loss
         weight = answers * 9 + 1
-        loss = torch.mean(weight * torch.pow(e_score - answers, 2))
+        loss_score = torch.mean(weight * torch.pow(e_score - answers, 2))
 
-        return loss
+        return {'loss_score': loss_score, 'loss_prob': loss_prob}
