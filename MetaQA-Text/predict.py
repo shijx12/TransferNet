@@ -43,27 +43,34 @@ def validate(args, model, data, device, verbose = False):
                         print(question)
                         print('hop: {}'.format(hops[i]))
                         print('> topic entity: {}'.format(vocab['id2entity'][topic_entities[i].max(0)[1].item()]))
-                        rg = model.kb_range.cpu()[topic_entities[i].argmax(0)]
-                        rg = torch.arange(rg[0], rg[1]).long()
-                        pair = model.kb_pair.cpu()[rg].tolist()
-                        desc = model.kb_desc.cpu()[rg].tolist()
-                        info = []
-                        for p, d in zip(pair, desc):
-                            s, o = p
-                            info.append('{}--->>>{}:  {}'.format(
-                                vocab['id2entity'][s],
-                                vocab['id2entity'][o],
-                                ' '.join([vocab['id2word'][_] for _ in d if _ > 0])
-                                ))
-                        print('>\n' + '\n'.join(info))
+                        
+                        # rg = model.kb_range.cpu()[topic_entities[i].argmax(0)]
+                        # rg = torch.arange(rg[0], rg[1]).long()
+                        # pair = model.kb_pair.cpu()[rg].tolist()
+                        # desc = model.kb_desc.cpu()[rg].tolist()
+                        # info = []
+                        # for p, d in zip(pair, desc):
+                        #     s, o = p
+                        #     info.append('{}--->>>{}:  {}'.format(
+                        #         vocab['id2entity'][s],
+                        #         vocab['id2entity'][o],
+                        #         ' '.join([vocab['id2word'][_] for _ in d if _ > 0])
+                        #         ))
+                        # print('>\n' + '\n'.join(info))
+
                         for t in range(args.num_steps):
-                            print('> > > step {}'.format(t))
+                            print('>>>>>>>>>> step {} <<<<<<<<<<'.format(t))
                             tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2word'][x], y) for x,y in 
                                 zip(questions.tolist()[i], outputs['word_attns'][t].tolist()[i]) 
                                 if x > 0])
                             print('> ' + tmp)
+                            print('--- transfer path ---')
+                            for (ps, rd, pt) in outputs['path_infos'][i][t]:
+                                print('{} ---> {} ---> {}'.format(
+                                    vocab['id2entity'][ps], rd, vocab['id2entity'][pt]
+                                    ))
                             print('> entity: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if outputs['ent_probs'][t+1][i][_].item() > 0.9])))
-                        print('----')
+                        print('-----------')
                         print('> max is {}'.format(vocab['id2entity'][idx[i].item()]))
                         print('> golden: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if answers[i][_].item() == 1])))
                         print('> prediction: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if e_score[i][_].item() > 0.9])))

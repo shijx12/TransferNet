@@ -5,6 +5,7 @@ import pickle
 import math
 
 from utils.BiGRU import GRU, BiGRU
+from IPython import embed
 
 class TransferNet(nn.Module):
     def __init__(self, args, dim_word, dim_hidden, vocab, max_active):
@@ -69,6 +70,13 @@ class TransferNet(nn.Module):
         last_e = e_s
         word_attns = []
         ent_probs = [e_s]
+        
+        path_infos = [] # [bsz, num_steps]
+        for i in range(bsz):
+            path_infos.append([])
+            for j in range(self.num_steps):
+                path_infos[i].append(None)
+
         for t in range(self.num_steps):
             cq_t = self.step_encoders[t](q_embeddings) # [bsz, dim_h]
             q_logits = torch.sum(cq_t.unsqueeze(1) * q_word_h, dim=2) # [bsz, max_q]
@@ -98,6 +106,12 @@ class TransferNet(nn.Module):
                 # transfer probability
                 e_stack.append(self.follow(last_e[i], pair, d_prob))
 
+                # collect path
+                act_idx = d_prob.gt(0.9)
+                act_pair = pair[act_idx].tolist()
+                act_desc = [' '.join([self.vocab['id2word'][w] for w in d if w > 0]) for d in desc[act_idx].tolist()]
+                path_infos[i][t] = [(act_pair[_][0], act_desc[_], act_pair[_][1]) for _ in range(len(act_pair))]
+
             last_e = torch.stack(e_stack, dim=0)
 
 
@@ -107,35 +121,48 @@ class TransferNet(nn.Module):
             last_e = last_e / z
 
             # Specifically for MetaQA: reshape cycle entities to 0, because A-r->B-r_inv->A is not allowed
-            # if t > 0:
-            #     prev_rel = torch.argmax(rel_probs[-2], dim=1)
-            #     curr_rel = torch.argmax(rel_probs[-1], dim=1)
-            #     prev_prev_ent_prob = ent_probs[-2]
-            #     # in our vocabulary, indices of inverse relations are adjacent. e.g., director:0, director_inv:1
-            #     m = torch.zeros((bsz,1)).to(device)
-            #     m[(torch.abs(prev_rel-curr_rel)==1) & (torch.remainder(torch.min(prev_rel,curr_rel),2)==0)] = 1
-            #     ent_m = m.float() * prev_prev_ent_prob.gt(0.9).float()
-            #     last_e = (1-ent_m) * last_e
-
-            # Specifically for MetaQA: for 2-hop questions, topic entity is excluded from answer
-            # if t == self.num_steps-1:
-            #     stack_rel_probs = torch.stack(rel_probs, dim=1) # [bsz, num_step, num_rel]
-            #     stack_rel = torch.argmax(stack_rel_probs, dim=2) # [bsz, num_step]
-            #     num_self = stack_rel.eq(self.vocab['relation2id']['<SELF_REL>']).long().sum(dim=1) # [bsz,]
-            #     m = num_self.eq(1).float().unsqueeze(1) * e_s
-            #     last_e = (1-m) * last_e
+            if t > 0:
+                ent_m = torch.zeros_like(last_e)
+                for i in range(bsz):
+                    prev_inv = set()
+                    for (s, r, o) in path_infos[i][t-1]:
+                        prev_inv.add((o, r.replace('__subject__', 'obj').replace('__object__', 'sub'), s))
+                    for (s, r, o) in path_infos[i][t]:
+                        element = (s, r.replace('__subject__', 'sub').replace('__object__', 'obj'), o)
+                        if r != '__self_rel__' and element in prev_inv:
+                            ent_m[i, o] = 1
+                            # print('block cycle: {}'.format(' ---> '.join(list(map(str, element)))))
+                last_e = (1-ent_m) * last_e
 
             ent_probs.append(last_e.detach())
 
-        # question mask
+        # Specifically for MetaQA: for 2-hop questions, topic entity is excluded from answer
+        hop2m = torch.zeros((bsz,)).to(device)
+        for i in range(bsz):
+            self_cnt = 0
+            for t in range(self.num_steps):
+                cnt = len([r for (s, r, o) in path_infos[i][t] if r == '__self_rel__'])
+                if len(path_infos[i][t]) > 0 and cnt/len(path_infos[i][t]) > 0.5:
+                    self_cnt += 1
+            if self_cnt == 1:
+                hop2m[i] = 1
+                # print('block 2-hop topic')
+        ent_m = hop2m.unsqueeze(1) * e_s
+        last_e = (1-ent_m) * last_e
+
+
+        # question mask, incorporate language bias
         q_mask = torch.sigmoid(self.q_classifier(q_embeddings))
         last_e = last_e * q_mask
 
+
+        ent_probs[-1] = last_e.detach() # use the newest last_e
         if answers is None:
             return {
                 'e_score': last_e,
                 'word_attns': word_attns,
-                'ent_probs': ent_probs
+                'ent_probs': ent_probs,
+                'path_infos': path_infos
             }
 
         # Distance loss

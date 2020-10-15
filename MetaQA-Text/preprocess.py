@@ -15,6 +15,7 @@ import re
 SUB_PH = '__subject__'
 OBJ_PH = '__object__'
 ENT_PH = '__entity__'
+SELF_PH = '__self_rel__'
 
 
 def encode_kb(args, vocab):
@@ -86,12 +87,11 @@ def encode_kb(args, vocab):
             cache.append(line)
 
     # add self relation
-    r = '__self_rel__'
     entities = set()
     for sub, obj, desc in triples:
         entities.add(sub)
     for e in entities:
-        triples.append((e, e, [r]))
+        triples.append((e, e, [SELF_PH]))
 
 
     for tri in triples[:100]:

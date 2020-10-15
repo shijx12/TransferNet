@@ -27,7 +27,7 @@ def train(args):
     train_pt = os.path.join(args.input_dir, 'train.pt')
     val_pt = os.path.join(args.input_dir, 'val.pt')
     test_pt = os.path.join(args.input_dir, 'test.pt')
-    train_loader = DataLoader(vocab_json, train_pt, args.batch_size, args.limit_hop, training=True, curriculum=args.curriculum)
+    train_loader = DataLoader(vocab_json, train_pt, args.batch_size, args.limit_hop, training=True)
     val_loader = DataLoader(vocab_json, val_pt, args.batch_size, args.limit_hop)
     test_loader = DataLoader(vocab_json, test_pt, args.batch_size, args.limit_hop)
     vocab = train_loader.vocab
@@ -63,6 +63,11 @@ def train(args):
 
     for epoch in range(args.num_epoch):
         model.train()
+        if args.curriculum:
+            if epoch < 3:
+                train_loader = DataLoader(vocab_json, train_pt, args.batch_size, args.limit_hop, training=True, curriculum=args.curriculum)
+            elif epoch == 3:
+                train_loader = DataLoader(vocab_json, train_pt, args.batch_size, args.limit_hop, training=True)
         for iteration, batch in enumerate(train_loader):
             iteration = iteration + 1
 
@@ -104,7 +109,7 @@ def train(args):
         acc = validate(args, model, val_loader, device)
         logging.info(acc)
         scheduler.step(acc['all'])
-        torch.save(model.state_dict(), os.path.join(args.save_dir, 'model.pt'))
+        torch.save(model.state_dict(), os.path.join(args.save_dir, 'model_epoch-{}_acc-{:.4f}.pt'.format(epoch, acc['all'])))
         
 
 def main():
@@ -117,7 +122,7 @@ def main():
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--weight_decay', default=1e-5, type=float)
-    parser.add_argument('--num_epoch', default=3, type=int)
+    parser.add_argument('--num_epoch', default=20, type=int)
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='radam', type = str)
