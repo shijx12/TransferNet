@@ -6,7 +6,7 @@ import argparse
 import shutil
 from tqdm import tqdm
 import time
-from utils.misc import MetricLogger, load_glove, idx_to_one_hot, UseStyle, RAdam
+from utils.misc import MetricLogger, idx_to_one_hot, RAdam
 from .data import DataLoader
 from .model import TransferNet
 from .predict import validate
@@ -25,23 +25,18 @@ def train(args):
     logging.info("Create train_loader, val_loader and test_loader.........")
     vocab_json = os.path.join(args.input_dir, 'vocab.json')
     train_pt = os.path.join(args.input_dir, 'train.pt')
-    val_pt = os.path.join(args.input_dir, 'val.pt')
-    test_pt = os.path.join(args.input_dir, 'test.pt')
+    val_pt = os.path.join(args.input_dir, 'dev.pt')
     train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True)
-    val_loader = DataLoader(vocab_json, val_pt, args.eval_batch_size)
-    test_loader = DataLoader(vocab_json, test_pt, args.eval_batch_size)
+    val_loader = DataLoader(vocab_json, val_pt, args.batch_size)
     vocab = train_loader.vocab
 
     logging.info("Create model.........")
-    # pretrained = load_glove(args.glove_pt, vocab['id2word'])
-    model = TransferNet(args, args.dim_word, args.dim_hidden, vocab)
-    # model.word_embeddings.weight.data = torch.Tensor(pretrained)
+    model = TransferNet(args, vocab)
     if not args.ckpt == None:
         model.load_state_dict(torch.load(args.ckpt))
     model = model.to(device)
-    model.kg.Msubj = model.kg.Msubj.to(device)
-    model.kg.Mobj = model.kg.Mobj.to(device)
-    model.kg.Mrel = model.kg.Mrel.to(device)
+    model.kb_triple = model.kb_triple.to(device)
+    model.kb_range = model.kb_range.to(device)
 
     logging.info(model)
     if args.opt == 'adam':
@@ -54,8 +49,7 @@ def train(args):
         optimizer = optim.Adagrad(model.parameters(), args.lr, weight_decay=args.weight_decay)
     else:
         raise NotImplementedError
-    # scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[4], gamma=0.1)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max')
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[20], gamma=0.1)
 
     meters = MetricLogger(delimiter="  ")
     # validate(args, model, val_loader, device, verbose = False)
@@ -66,12 +60,12 @@ def train(args):
         for iteration, batch in enumerate(train_loader):
             iteration = iteration + 1
 
-            question, topic_entity, answer, hop = batch
-            question = question.to(device)
-            topic_entity = idx_to_one_hot(topic_entity, len(vocab['entity2id'])).to(device)
-            answer = idx_to_one_hot(answer, len(vocab['entity2id'])).to(device)
-            answer[:, 0] = 0
-            loss = model(question, topic_entity, answer)
+            sub, obj, rel = batch
+            sub = idx_to_one_hot(sub.unsqueeze(1), len(vocab['entity2id'])).to(device)
+            obj = idx_to_one_hot(obj, len(vocab['entity2id'])).to(device)
+            obj[:, 0] = 0
+            rel = rel.to(device)
+            loss = model(sub, rel, obj)
             optimizer.zero_grad()
             if isinstance(loss, dict):
                 total_loss = sum(loss.values())
@@ -103,7 +97,7 @@ def train(args):
             # break
         acc = validate(args, model, val_loader, device, verbose = False)
         logging.info(acc)
-        scheduler.step(acc['score'])
+        scheduler.step()
         torch.save(model.state_dict(), os.path.join(args.save_dir, 'model-%d.pt'%(epoch)))
         
 
@@ -112,22 +106,18 @@ def main():
     # input and output
     parser.add_argument('--input_dir', default = './input')
     parser.add_argument('--save_dir', required=True, help='path to save checkpoints and logs')
-    parser.add_argument('--glove_pt', default='/data/csl/resources/word2vec/glove.840B.300d.py36.pt')
     parser.add_argument('--ckpt', default = None)
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--weight_decay', default=1e-5, type=float)
     parser.add_argument('--num_epoch', default=30, type=int)
-    parser.add_argument('--batch_size', default=64, type=int)
-    parser.add_argument('--eval_batch_size', default = 64, type = int)
+    parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='radam', type = str)
-    parser.add_argument('--hist', default = 0, type = int)
     # model hyperparameters
-    parser.add_argument('--dim_emb', default=300, type=int)
     parser.add_argument('--num_steps', default=3, type=int)
-    parser.add_argument('--dim_word', default=300, type=int)
-    parser.add_argument('--dim_hidden', default=1024, type=int)
+    parser.add_argument('--max_active', default=50, type=int, help='max number of active entities at each step')
+    parser.add_argument('--dim_hidden', default=100, type=int)
     args = parser.parse_args()
 
     # make logging.info display into both shell and file

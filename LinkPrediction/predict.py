@@ -14,56 +14,26 @@ from IPython import embed
 def validate(args, model, data, device, verbose = False):
     vocab = data.vocab
     model.eval()
-    count = defaultdict(int)
+    count = 0
     correct = defaultdict(int)
     with torch.no_grad():
         for batch in tqdm(data, total=len(data)):
-            questions, topic_entities, answers, hops = batch
-            topic_entities = idx_to_one_hot(topic_entities, len(vocab['entity2id']))
-            answers = idx_to_one_hot(answers, len(vocab['entity2id']))
-            answers[:, 0] = 0
-            questions = questions.to(device)
-            topic_entities = topic_entities.to(device)
-            outputs = model(questions, topic_entities) # [bsz, Esize]
+            sub, obj, rel = batch
+            sub = idx_to_one_hot(sub.unsqueeze(1), len(vocab['entity2id'])).to(device)
+            rel = rel.to(device)
+            outputs = model(sub, rel)
             e_score = outputs['e_score'].cpu()
-            scores, idx = torch.max(e_score, dim = 1) # [bsz], [bsz]
-            match_score = torch.gather(answers, 1, idx.unsqueeze(-1)).squeeze().tolist()
-            scores_prob, idx_prob = torch.max(outputs['pred_e'].cpu(), dim = 1) # [bsz], [bsz]
-            match_prob = torch.gather(answers, 1, idx_prob.unsqueeze(-1)).squeeze().tolist()
-            for n, match in zip(['score', 'prob'], [match_score, match_prob]):
-                for m in match:
-                    count['{}'.format(n)] += 1
-                    correct['{}'.format(n)] += m
-            if verbose:
-                for i in range(len(answers)):
-                    if answers[i][idx[i]].item() == 0:
-                        # if hops[i] == 1:
-                        #     continue
-                        print('================================================================')
-                        # question = ' '.join([vocab['id2word'][_] for _ in questions.tolist()[i] if _ > 0])
-                        # print(questions.tolist())
-                        question = vocab['id2relation'][questions.tolist()[i][0]]
-                        print('> question: {}'.format(question))
-                        print('> topic entity: {}'.format(vocab['id2entity'][topic_entities[i].max(0)[1].item()]))
-                        for t in range(args.num_steps):
-                            print('> > > step {}'.format(t))
-                            # tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2word'][x], y) for x,y in 
-                            #     zip(questions.tolist()[i], outputs['word_attns'][t].tolist()[i]) 
-                            #     if x > 0])
-                            # tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2relation'][x], y) for x,y in 
-                            #     enumerate(outputs['rel_probs'][t].tolist()[i])][:10])
-                            sorted_prob, sorted_idx = torch.sort(outputs['rel_probs'][t])
-        
-                            tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2relation'][x], y) for x,y in 
-                                zip(sorted_idx.tolist()[i][:10] , sorted_prob.tolist()[i][:10])])
-                            print('> ' + tmp)
-                            print('> entity: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if outputs['ent_probs'][t+1][i][_].item() > 0.9])))
-                        print('----')
-                        print('> max is {}'.format(vocab['id2entity'][idx[i].item()]))
-                        print('> golden: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if answers[i][_].item() == 1])))
-                        print('> prediction: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if e_score[i][_].item() > 0.9])))
-                        # embed()
-    acc = {k:correct[k]/count[k] for k in count}
+            sort_idx = torch.argsort(e_score, dim=1, descending=True)
+
+            for i in range(len(batch)):
+                answer = set([_ for _ in obj[i].tolist() if _ > 0])
+                count += len(answer)
+                for k in (1, 5, 10):
+                    for j in range(k):
+                        if sort_idx[i,j].item() in answer:
+                            correct['hit@{}'.format(k)] += 1                        
+
+    acc = {k:correct[k]/count for k in correct}
     result = ' | '.join(['%s:%.4f'%(key, value) for key, value in acc.items()])
     print(result)
     return acc

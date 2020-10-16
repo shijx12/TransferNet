@@ -1,26 +1,30 @@
 import torch
 import torch.nn as nn
 import math
+import os
+import pickle
 
 from utils.BiGRU import GRU, BiGRU
-from .Knowledge_graph import KnowledgeGraph
 
 class TransferNet(nn.Module):
-    def __init__(self, args, dim_word, dim_hidden, vocab):
+    def __init__(self, args, vocab):
         super().__init__()
-        self.args = args
         self.vocab = vocab
-        self.kg = KnowledgeGraph(args, vocab)
-        # num_words = len(vocab['word2id'])
-        num_entities = len(vocab['entity2id'])
-        num_relations = len(vocab['relation2id'])
+        self.max_active = args.max_active
+        self.dim_hidden = args.dim_hidden
+        dim_hidden = args.dim_hidden
         self.num_steps = args.num_steps
-        self.path_encoder = GRU(dim_hidden, dim_hidden, num_layers=3, dropout = 0.3)
-        self.dim_hidden = dim_hidden
-        # self.question_encoder = BiGRU(dim_word, dim_hidden, num_layers=1, dropout=0.2)
+
+        with open(os.path.join(args.input_dir, 'kb.pt'), 'rb') as f:
+            self.kb_triple = torch.LongTensor(pickle.load(f))
+            self.kb_range = torch.LongTensor(pickle.load(f))
+
+        num_entities = len(vocab['entity2id'])
+        self.num_entities = num_entities
+        num_relations = len(vocab['relation2id'])
         
-        # self.word_embeddings = nn.Embedding(num_words, dim_word)
-        # self.word_dropout = nn.Dropout(0.3)
+        self.path_encoder = GRU(dim_hidden, dim_hidden, num_layers=1, dropout = 0.2)
+
         self.step_encoders = []
         for i in range(self.num_steps):
             m = nn.Sequential(
@@ -29,15 +33,12 @@ class TransferNet(nn.Module):
             )
             self.step_encoders.append(m)
             self.add_module('step_encoders_{}'.format(i), m)
-        # self.rel_classifier = nn.Linear(dim_hidden, num_relations)
-        self.cq_linear = nn.Linear(2 * dim_hidden, dim_hidden)
-        # self.ca_linear = nn.Linear(dim_hidden, 1)
+
+        self.rel_classifier = nn.Linear(dim_hidden, 1)
 
         self.relation_embeddings = nn.Embedding(num_relations, dim_hidden)
-        self.entity_embeddings = nn.Parameter(torch.FloatTensor(num_entities, dim_hidden))
-        self.entity_bias = nn.Parameter(torch.FloatTensor(num_entities))
-        nn.init.normal_(self.entity_embeddings, mean=0, std=1/math.sqrt(dim_hidden))
-        self.entity_bias.data.zero_()
+        self.entity_embeddings = nn.Embedding(num_entities, dim_hidden)
+        nn.init.normal_(self.entity_embeddings.weight, mean=0, std=1/math.sqrt(dim_hidden))
         nn.init.normal_(self.relation_embeddings.weight, mean=0, std=1/math.sqrt(dim_hidden))
 
         for m in self.modules():
@@ -45,11 +46,6 @@ class TransferNet(nn.Module):
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:
                     m.bias.data.zero_()
-
-    def follow(self, e, r):
-        x = torch.sparse.mm(self.kg.Msubj, e.t()) * torch.sparse.mm(self.kg.Mrel, r.t())
-        return torch.sparse.mm(self.kg.Mobj.t(), x).t() # [bsz, Esize]
-    
 
     def hist_transfer(self, questions, e_s, answers):
         '''
@@ -114,99 +110,87 @@ class TransferNet(nn.Module):
             'ent_probs': ent_probs
         }
 
-    def transfer(self, questions, e_s, answers):
+
+    def forward(self, start, query, answer = None):
         '''
         Args:
-            questions [bsz, 1]: r id for each query
-            e_s [bsz, num_entities]: one hot vector of h for each query
-            answers [bsz, num_entities]: one hot vector of t in training, to mask the ground truth entity in kg 
+            start [bsz, num_entities]: one hot vector of h for each query
+            query [bsz]: r id for each query
         '''
-        device = questions.device
-        bsz = questions.size(0)
-        q_emb = self.relation_embeddings(questions.squeeze()) # [bsz, dim_h]
-        last_e = e_s
+        device = query.device
+        bsz = query.size(0)
+        last_e = start
         rel_probs = []
-        ent_probs = [e_s]
+        ent_probs = [start]
+        start_idx = torch.argmax(start, dim=1)
+        q_emb = self.relation_embeddings(query)
+        hist_emb = torch.zeros((bsz, self.num_entities, self.dim_hidden)).to(device)
 
         for t in range(self.num_steps):
             cq_t = self.step_encoders[t](q_emb) # [bsz, dim_h]
-            rel_logits = cq_t @ self.relation_embeddings.weight.t() # [bsz, num_relations]
-            rel_dist = torch.softmax(rel_logits, 1) # [bsz, num_relations]
-            last_e = self.follow(last_e, rel_dist)
-            if t == 0 and answers != None:
-                gt_mask = torch.gather(rel_dist, 1, questions) # [bsz, 1]
-                gt_mask = answers * gt_mask # [bsz, num_entities]
-                last_e = last_e - gt_mask
-            rel_probs.append(rel_dist)
+            e_stack = []
+            hist_stack = []
+            for i in range(bsz):
+                topk = 1 if t == 0 else 3
+                e_idx = torch.topk(last_e[i], k=topk, dim=0)[1].tolist() + \
+                        last_e[i].gt(0.9).nonzero().squeeze(1).tolist()
+                rg = []
+                for j in set(e_idx):
+                    rg.append(torch.arange(self.kb_range[j,0], self.kb_range[j,1]).long().to(device))
+                rg = torch.cat(rg, dim=0) # [rsz,]
+
+                if len(rg) > self.max_active: # limit the number of next-hop
+                    rg = rg[torch.randperm(len(rg))[:self.max_active]]
+
+                # candidate triples to transfer
+                triples = self.kb_triple[rg] # [rsz, 3]
+                if self.training:
+                    # remove the direct target link
+                    sub, rel = triples[:,0], triples[:,2]
+                    mask = sub.eq(start_idx[i]) & rel.eq(query[i])
+                    triples = triples[~mask]
+                sub, obj, rel = triples[:,0], triples[:,1], triples[:,2]
+
+                sub_feat = torch.index_select(hist_emb[i], 0, sub) # [rsz, dim_h]
+                rel_feat = self.relation_embeddings(rel) # [rsz, dim_h]
+                trans_feat = self.path_encoder.forward_one_step(
+                    rel_feat.unsqueeze(1), 
+                    sub_feat.unsqueeze(0))[0].squeeze(1) # [rsz, dim_h]
+                trans_prob = torch.sigmoid(self.rel_classifier(trans_feat * cq_t[i:i+1])).squeeze(1) # [rsz,]
+
+                # transfer probability
+                obj_p = last_e[i][sub] * trans_prob
+                obj_ep = torch.index_add(torch.zeros_like(last_e[i]), 0, obj, obj_p)
+                e_stack.append(obj_ep)
+
+                # update history
+                obj_feat = trans_feat * obj_p.unsqueeze(1) # [rsz, dim_h]
+                # obj_feat = trans_feat
+                new_hist = torch.index_add(torch.zeros_like(hist_emb[i]), 0, obj, obj_feat)
+                hist_stack.append(new_hist)
+
+            last_e = torch.stack(e_stack, dim=0)
+            hist_emb = torch.stack(hist_stack, dim=0)
+
             # reshape >1 scores to 1 in a differentiable way
             m = last_e.gt(1).float()
             z = (m * last_e + (1-m)).detach()
             last_e = last_e / z
 
-            # Specifically for MetaQA: reshape cycle entities to 0, because A-r->B-r_inv->A is not allowed
-            if t > 0:
-                prev_rel = torch.argmax(rel_probs[-2], dim=1)
-                curr_rel = torch.argmax(rel_probs[-1], dim=1)
-                prev_prev_ent_prob = ent_probs[-2]
-                # in our vocabulary, indices of inverse relations are adjacent. e.g., director:0, director_inv:1
-                m = torch.zeros((bsz,1)).to(device)
-                m[(torch.abs(prev_rel-curr_rel)==1) & (torch.remainder(torch.min(prev_rel,curr_rel),2)==0)] = 1
-                ent_m = m.float() * prev_prev_ent_prob.gt(0.9).float()
-                last_e = (1-ent_m) * last_e
-
-            # Specifically for MetaQA: for 2-hop questions, topic entity is excluded from answer
-            if t == self.num_steps-1:
-                stack_rel_probs = torch.stack(rel_probs, dim=1) # [bsz, num_step, num_rel]
-                stack_rel = torch.argmax(stack_rel_probs, dim=2) # [bsz, num_step]
-                num_self = stack_rel.eq(self.vocab['relation2id']['<SELF_REL>']).long().sum(dim=1) # [bsz,]
-                m = num_self.eq(1).float().unsqueeze(1) * e_s
-                last_e = (1-m) * last_e
-
             ent_probs.append(last_e.detach())
-        return {
-            'last_e': last_e,
-            'rel_probs': rel_probs,
-            'ent_probs': ent_probs
-        }
 
-
-
-    def forward(self, questions, e_s, answers = None):
-        # question_lens = questions.size(1) - questions.eq(0).long().sum(dim=1) # 0 means <PAD>
-        # q_word_emb = self.word_dropout(self.word_embeddings(questions)) # [bsz, max_q, dim_hidden]
-        # q_word_h, q_embeddings, q_hn = self.question_encoder(q_word_emb, question_lens) # [bsz, max_q, dim_h], [bsz, dim_h], [num_layers, bsz, dim_h]
-        if self.args.hist:
-            outputs = self.hist_transfer(questions, e_s, answers)
-        else:
-            outputs = self.transfer(questions, e_s, answers) # [bsz, num_entities]
-
-        e_score = outputs['last_e']
-        normed_e_score = e_score / (e_score.sum(1, True) + 1e-6) # [bsz, num_entities]
-        # detach e_score, so we just learn the classifier by cross entropy loss
-        pred_e = normed_e_score.detach() @ self.entity_embeddings # [bsz, dim_hidden]
-        pred_e = pred_e @ self.entity_embeddings.t() + self.entity_bias.unsqueeze(0) # [bsz, num_entities]
-
-        if answers is None:
+        if answer is None:
             return {
-                'e_score': e_score,
-                'pred_e': pred_e,
-                'rel_probs': outputs['rel_probs'],
-                'ent_probs': outputs['ent_probs']
+                'e_score': last_e,
+                'ent_probs': ent_probs
             }
-        # # CrossEntropy with most possible entity
-        # pos_pred_e = pred_e * answers
-        # idx = torch.argmax(pos_pred_e, 1) # [bsz]
-        # if (idx==0).sum().item() > 0:
-        #     idx[idx==0] = torch.argmax(answers[idx==0], 1)
-        # loss_prob = nn.CrossEntropyLoss()(pred_e, idx)
-        # print(answers.size())
-        idx = torch.argmax(answers, 1)
-        # print(idx.size())
-        loss_prob = nn.CrossEntropyLoss()(pred_e, idx)
 
-        # Distance loss
-        weight = answers * 9 + 1
-        # weight = answers * 0 + 1
-        loss_score = torch.mean(weight * torch.pow(e_score - answers, 2))
+        # weight = answer * 9 + 1
+        weight = torch.zeros_like(answer)
+        weight[answer==1] = 10
+        neg_ratio = 0.01
+        weight[answer==0] = (weight[answer==0].random_(0, to=1000)/1000).le(neg_ratio).float() # negative sample
+        # from IPython import embed; embed()
+        loss = torch.mean(weight * torch.pow(last_e - answer, 2))
 
-        return {'loss_score': loss_score, 'loss_prob': loss_prob}
+        return loss
