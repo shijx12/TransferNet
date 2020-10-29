@@ -32,7 +32,24 @@ def validate(args, model, data, device, verbose = False):
                     for j in range(k):
                         if sort_idx[i,j].item() in answer:
                             correct['hit@{}'.format(k)] += 1                        
-
+            if verbose:
+                for i in range(len(sub)):
+                    print('================================================================')
+                    print('> head entity: {}'.format(vocab['id2entity'][sub[i].max(0)[1].item()]))
+                    print('> query relation: {}'.format(vocab['id2relation'][rel[i].item()]))
+                    for t in range(args.num_steps):
+                        print('>>>>>>>>>> step {} <<<<<<<<<<'.format(t))
+                        # for (si, ri, oi) in outputs['path_infos'][i][t]:
+                        #     print('{} ---> {} ---> {}'.format(
+                        #         vocab['id2entity'][si], vocab['id2relation'][ri], vocab['id2entity'][oi]
+                        #         ))
+                        for ri in outputs['path_infos'][i][t]:
+                            print(vocab['id2relation'][ri])
+                        print('> entity: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(sub[i])) if outputs['ent_probs'][t+1][i][_].item() > 0.9])))
+                    print('-----------')
+                    print('> top 10 are {}'.format('; '.join([vocab['id2entity'][sort_idx[i, k].item()] for k in range(10)])))
+                    print('> golden: {}'.format('; '.join([vocab['id2entity'][_] for _ in obj[i].tolist() if _ > 0])))
+                    embed()
     acc = {k:correct[k]/count for k in correct}
     result = ' | '.join(['%s:%.4f'%(key, value) for key, value in acc.items()])
     print(result)
@@ -47,21 +64,23 @@ def main():
     parser.add_argument('--mode', default='val', choices=['val', 'vis', 'test'])
     # model hyperparameters
     parser.add_argument('--num_steps', default=3, type=int)
-    parser.add_argument('--dim_word', default=300, type=int)
-    parser.add_argument('--dim_hidden', default=1024, type=int)
+    parser.add_argument('--max_active', default=50, type=int, help='max number of active entities at each step')
+    parser.add_argument('--dim_hidden', default=100, type=int)
     args = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     vocab_json = os.path.join(args.input_dir, 'vocab.json')
-    val_pt = os.path.join(args.input_dir, 'val.pt')
+    val_pt = os.path.join(args.input_dir, 'dev.pt')
     test_pt = os.path.join(args.input_dir, 'test.pt')
     val_loader = DataLoader(vocab_json, val_pt, 64, True)
     test_loader = DataLoader(vocab_json, test_pt, 64)
     vocab = val_loader.vocab
 
-    model = TransferNet(args, args.dim_word, args.dim_hidden, vocab)
+    model = TransferNet(args, vocab)
     model.load_state_dict(torch.load(args.ckpt))
     model = model.to(device)
+    model.kb_triple = model.kb_triple.to(device)
+    model.kb_range = model.kb_range.to(device)
     model.kg.Msubj = model.kg.Msubj.to(device)
     model.kg.Mobj = model.kg.Mobj.to(device)
     model.kg.Mrel = model.kg.Mrel.to(device)

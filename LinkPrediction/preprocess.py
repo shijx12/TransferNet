@@ -15,6 +15,10 @@ def encode_kb(args, vocab):
     with open(os.path.join(args.input_dir, 'train.triples')) as f:
         kb = f.readlines()
     triples = []
+    Msubj = []
+    Mobj = []
+    Mrel = []
+    idx = 0
     for line in tqdm(kb):
         s, o, r = line.strip().split('\t')
         r_inv = r + '_inv'
@@ -25,6 +29,15 @@ def encode_kb(args, vocab):
         s_id, r_id, o_id, r_inv_id = vocab['entity2id'][s], vocab['relation2id'][r], vocab['entity2id'][o], vocab['relation2id'][r_inv]
         triples.append((s_id, o_id, r_id))
         triples.append((o_id, s_id, r_inv_id))
+
+        Msubj.append([idx, s_id])
+        Mobj.append([idx, o_id])
+        Mrel.append([idx, r_id])
+        idx += 1
+        Msubj.append([idx, o_id])
+        Mobj.append([idx, s_id])
+        Mrel.append([idx, r_inv_id])
+        idx += 1
         
     # self relation
     r = '<SELF_REL>'
@@ -33,7 +46,19 @@ def encode_kb(args, vocab):
     for i in vocab['entity2id'].values():
         triples.append((i, i, r_id))
 
+        Msubj.append([idx, i])
+        Mobj.append([idx, i])
+        Mrel.append([idx, r_id])
+        idx += 1
+
     print('{} entities, {} relations, {} triples (including reverse and self)'.format(len(vocab['entity2id']), len(vocab['relation2id']), len(triples)))
+
+    Msubj = np.array(Msubj, dtype = np.int32)
+    Mobj = np.array(Mobj, dtype = np.int32)
+    Mrel = np.array(Mrel, dtype = np.int32)
+    np.save(os.path.join(args.output_dir, 'Msubj.npy'), Msubj)
+    np.save(os.path.join(args.output_dir, 'Mobj.npy'), Mobj)
+    np.save(os.path.join(args.output_dir, 'Mrel.npy'), Mrel)
 
     triples = sorted(triples)
     # [start, end) of each entity

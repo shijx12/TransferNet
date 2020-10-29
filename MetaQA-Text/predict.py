@@ -27,7 +27,7 @@ def validate(args, model, data, device, verbose = False):
             outputs = model(questions, topic_entities) # [bsz, Esize]
             e_score = outputs['e_score'].cpu()
             scores, idx = torch.max(e_score, dim = 1) # [bsz], [bsz]
-            match_score = torch.gather(answers, 1, idx.unsqueeze(-1)).squeeze().tolist()
+            match_score = torch.gather(answers, 1, idx.unsqueeze(-1)).squeeze(1).tolist()
             for h, m in zip(hops, match_score):
                 count['all'] += 1
                 count['{}-hop'.format(h)] += 1
@@ -90,8 +90,9 @@ def main():
     # model hyperparameters
     parser.add_argument('--num_steps', default=3, type=int)
     parser.add_argument('--dim_word', default=300, type=int)
-    parser.add_argument('--dim_hidden', default=1024, type=int)
-    parser.add_argument('--max_active', default=50, type=int, help='max number of active entities at each step')
+    parser.add_argument('--dim_hidden', default=768, type=int)
+    parser.add_argument('--ent_act_thres', default=0.7, type=float, help='activate an entity when its score exceeds this value')
+    parser.add_argument('--max_active', default=400, type=int, help='max number of active entities at each step')
     parser.add_argument('--limit_hop', default=-1, type=int)
     args = parser.parse_args()
 
@@ -103,7 +104,7 @@ def main():
     test_loader = DataLoader(vocab_json, test_pt, 64, args.limit_hop)
     vocab = val_loader.vocab
 
-    model = TransferNet(args, args.dim_word, args.dim_hidden, vocab, args.max_active)
+    model = TransferNet(args, vocab)
     model.load_state_dict(torch.load(args.ckpt))
     model = model.to(device)
     model.kb_pair = model.kb_pair.to(device)

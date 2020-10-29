@@ -5,6 +5,7 @@ import torch.nn as nn
 import argparse
 import shutil
 from tqdm import tqdm
+import numpy as np
 import time
 from utils.misc import MetricLogger, idx_to_one_hot, RAdam
 from .data import DataLoader
@@ -37,6 +38,9 @@ def train(args):
     model = model.to(device)
     model.kb_triple = model.kb_triple.to(device)
     model.kb_range = model.kb_range.to(device)
+    model.kg.Msubj = model.kg.Msubj.to(device)
+    model.kg.Mobj = model.kg.Mobj.to(device)
+    model.kg.Mrel = model.kg.Mrel.to(device)
 
     logging.info(model)
     if args.opt == 'adam':
@@ -104,7 +108,7 @@ def train(args):
 def main():
     parser = argparse.ArgumentParser()
     # input and output
-    parser.add_argument('--input_dir', default = './input')
+    parser.add_argument('--input_dir', required=True)
     parser.add_argument('--save_dir', required=True, help='path to save checkpoints and logs')
     parser.add_argument('--ckpt', default = None)
     # training parameters
@@ -116,7 +120,8 @@ def main():
     parser.add_argument('--opt', default='radam', type = str)
     # model hyperparameters
     parser.add_argument('--num_steps', default=3, type=int)
-    parser.add_argument('--max_active', default=50, type=int, help='max number of active entities at each step')
+    parser.add_argument('--ent_act_thres', default=0.7, type=float, help='activate an entity when its score exceeds this value')
+    parser.add_argument('--max_active', default=2000, type=int, help='max number of active entities at each step')
     parser.add_argument('--dim_hidden', default=100, type=int)
     args = parser.parse_args()
 
@@ -132,8 +137,11 @@ def main():
     for k, v in vars(args).items():
         logging.info(k+':'+str(v))
 
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     # set random seed
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
     train(args)
 

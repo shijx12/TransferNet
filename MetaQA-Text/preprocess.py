@@ -10,6 +10,7 @@ from itertools import chain
 from tqdm import tqdm
 from utils.misc import *
 import re
+import random
 
 
 SUB_PH = '__subject__'
@@ -86,13 +87,28 @@ def encode_kb(args, vocab):
             line = ' '.join(line.split()[1:])
             cache.append(line)
 
-    # add self relation
-    entities = set()
-    for sub, obj, desc in triples:
-        entities.add(sub)
-    for e in entities:
-        triples.append((e, e, [SELF_PH]))
+    # add structured knowledge based on required ratio
+    if args.kb_ratio > 0:
+        assert args.kb_ratio <= 1
+        cnt = 0
+        for s in kb:
+            for (r, o) in kb[s]:
+                if random.random() < args.kb_ratio:
+                    triples.append((s, o, [r]))
+                    cnt += 2
+                    triples.append((o, s, [r+'_inv']))
+        print('add {} ({}%) structured triples'.format(cnt, args.kb_ratio*100))
 
+    # add self relation
+    if args.add_self == 1:
+        print('add self relations')
+        entities = set()
+        for sub, obj, desc in triples:
+            entities.add(sub)
+        for e in entities:
+            triples.append((e, e, [SELF_PH]))
+    else:
+        print('NOT self relations')
 
     for tri in triples[:100]:
         print(tri)
@@ -129,7 +145,6 @@ def encode_kb(args, vocab):
             start = i
     idx = vocab['entity2id'][triples[-1][0]]
     knowledge_range[idx] = (start, len(triples))
-
     
     # Encode
     so_pair = [[vocab['entity2id'][s], vocab['entity2id'][o]] for s,o,_ in triples]
@@ -241,8 +256,12 @@ def encode_dataset(vocab, dataset):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_dir', default = '/data/csl/resources/KBQA_datasets/MetaQA', type = str)
-    parser.add_argument('--output_dir', default = '/data/csl/exp/TransferNet/input', type = str)
+    parser.add_argument('--input_dir', required=True, type = str)
+    parser.add_argument('--output_dir', required=True, type = str)
+    parser.add_argument('--kb_ratio', type=float, default=0, 
+        help='How many structured knowledge will be incorporated into textual knowledge. Note they are randomly selected.')
+    parser.add_argument('--add_self', type = int, default = 1, help='whether add self relation, 0 means not')
+
     parser.add_argument('--min_cnt', type=int, default=5)
     parser.add_argument('--max_desc', type=int, default=16)
     parser.add_argument('--num_hop', type = str, default = '1, 2, 3')

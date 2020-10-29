@@ -4,6 +4,7 @@ import torch.optim as optim
 import torch.nn as nn
 import argparse
 import shutil
+import numpy as np
 from tqdm import tqdm
 import time
 from utils.misc import MetricLogger, load_glove, idx_to_one_hot, UseStyle, RAdam
@@ -34,9 +35,10 @@ def train(args):
 
     logging.info("Create model.........")
     pretrained = load_glove(args.glove_pt, vocab['id2word'])
-    model = TransferNet(args, args.dim_word, args.dim_hidden, vocab, args.max_active)
+    model = TransferNet(args, vocab)
     model.word_embeddings.weight.data = torch.Tensor(pretrained)
     if not args.ckpt == None:
+        logging.info("Load ckpt from {}".format(args.ckpt))
         model.load_state_dict(torch.load(args.ckpt))
     model = model.to(device)
     model.kb_pair = model.kb_pair.to(device)
@@ -63,11 +65,12 @@ def train(args):
 
     for epoch in range(args.num_epoch):
         model.train()
-        if args.curriculum:
-            if epoch < 3:
-                train_loader = DataLoader(vocab_json, train_pt, args.batch_size, args.limit_hop, training=True, curriculum=args.curriculum)
-            elif epoch == 3:
+        if args.curriculum==1:
+            if epoch < args.stop_curri_epo:
+                train_loader = DataLoader(vocab_json, train_pt, args.batch_size, args.limit_hop, training=True, curriculum=True)
+            elif epoch == args.stop_curri_epo:
                 train_loader = DataLoader(vocab_json, train_pt, args.batch_size, args.limit_hop, training=True)
+        
         for iteration, batch in enumerate(train_loader):
             iteration = iteration + 1
 
@@ -115,9 +118,9 @@ def train(args):
 def main():
     parser = argparse.ArgumentParser()
     # input and output
-    parser.add_argument('--input_dir', default = './input')
+    parser.add_argument('--input_dir', required=True)
     parser.add_argument('--save_dir', required=True, help='path to save checkpoints and logs')
-    parser.add_argument('--glove_pt', default='/data/csl/resources/word2vec/glove.840B.300d.py36.pt')
+    parser.add_argument('--glove_pt', default='/data/sjx/glove.840B.300d.py36.pt')
     parser.add_argument('--ckpt', default = None)
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
@@ -126,12 +129,14 @@ def main():
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='radam', type = str)
-    parser.add_argument('--curriculum', action='store_true')
+    parser.add_argument('--curriculum', default=0, type=int, help='whether use curriculum learning, 0 means not')
+    parser.add_argument('--stop_curri_epo', default=3, type=int, help='at which epoch currirulum learning stops')
     # model hyperparameters
     parser.add_argument('--num_steps', default=3, type=int)
     parser.add_argument('--dim_word', default=300, type=int)
-    parser.add_argument('--dim_hidden', default=1024, type=int)
-    parser.add_argument('--max_active', default=50, type=int, help='max number of active entities at each step')
+    parser.add_argument('--dim_hidden', default=768, type=int)
+    parser.add_argument('--ent_act_thres', default=0.7, type=float, help='activate an entity when its score exceeds this value') # 0.9 may cause convergency issue
+    parser.add_argument('--max_active', default=400, type=int, help='max number of active path at each step')
     parser.add_argument('--limit_hop', default=-1, type=int, help='only keep questions of certain hop, -1 means all questions')
     args = parser.parse_args()
 
@@ -147,8 +152,11 @@ def main():
     for k, v in vars(args).items():
         logging.info(k+':'+str(v))
 
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     # set random seed
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
     train(args)
 

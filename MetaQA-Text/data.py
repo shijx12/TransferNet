@@ -44,10 +44,13 @@ class DataLoader(torch.utils.data.DataLoader):
                 inputs.append(pickle.load(f))
 
         if limit_hop > 0:
+            print('only keep questions of hop {}'.format(limit_hop))
             mask = inputs[3] == limit_hop
             inputs = [i[mask] for i in inputs]
+            curriculum = False
 
         if curriculum:
+            print('curriculum')
             hops = inputs[3]
             idxs = []
             for h in [1, 2, 3]:

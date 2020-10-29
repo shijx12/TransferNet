@@ -3,16 +3,20 @@ import torch
 import torch.nn as nn
 import pickle
 import math
+import random
 
 from utils.BiGRU import GRU, BiGRU
 from IPython import embed
 
 class TransferNet(nn.Module):
-    def __init__(self, args, dim_word, dim_hidden, vocab, max_active):
+    def __init__(self, args, vocab):
         super().__init__()
         self.args = args
         self.vocab = vocab
-        self.max_active = max_active
+        self.max_active = args.max_active
+        self.ent_act_thres = args.ent_act_thres
+        dim_word = args.dim_word
+        dim_hidden = args.dim_hidden
         
         with open(os.path.join(args.input_dir, 'wiki.pt'), 'rb') as f:
             self.kb_pair = torch.LongTensor(pickle.load(f))
@@ -27,12 +31,12 @@ class TransferNet(nn.Module):
         self.question_encoder = BiGRU(dim_word, dim_hidden, num_layers=1, dropout=0.2)
         
         self.word_embeddings = nn.Embedding(num_words, dim_word)
-        self.word_dropout = nn.Dropout(0.3)
+        self.word_dropout = nn.Dropout(0.2)
         self.step_encoders = []
         for i in range(self.num_steps):
             m = nn.Sequential(
                 nn.Linear(dim_hidden, dim_hidden),
-                nn.Tanh()
+                nn.Tanh(),
             )
             self.step_encoders.append(m)
             self.add_module('step_encoders_{}'.format(i), m)
@@ -83,19 +87,41 @@ class TransferNet(nn.Module):
             q_dist = torch.softmax(q_logits, 1).unsqueeze(1) # [bsz, 1, max_q]
             word_attns.append(q_dist.squeeze(1))
             ctx_h = (q_dist @ q_word_h).squeeze(1) # [bsz, dim_h]
-
+            ctx_h = ctx_h + cq_t
 
             e_stack = []
+            cnt_trunc = 0
             for i in range(bsz):
-                e_idx = [torch.argmax(last_e[i], dim=0).item()] + \
-                        last_e[i].gt(0.9).nonzero().squeeze(1).tolist()
-                e_idx = e_idx[:min(len(e_idx), self.max_active)] # limit the number of active entities
+                # e_idx = torch.topk(last_e[i], k=1, dim=0)[1].tolist() + \
+                #         last_e[i].gt(self.ent_act_thres).nonzero().squeeze(1).tolist()
+                # DOING
+                if self.training and t > 0 and random.random() < 0.05:
+                    e_idx = last_e[i].gt(0).nonzero().squeeze(1).tolist()
+                    random.shuffle(e_idx)
+                else:
+                    sort_score, sort_idx = torch.sort(last_e[i], dim=0, descending=True)
+                    e_idx = sort_idx[sort_score.gt(self.ent_act_thres)].tolist()
+                    e_idx = set(e_idx) - set([0])
+                    if len(e_idx) == 0:
+                        # print('no active entity at step {}'.format(t))
+                        pad = sort_idx[0].item()
+                        if pad == 0:
+                            pad = sort_idx[1].item()
+                        e_idx = set([pad])
+
                 rg = []
-                for j in set(e_idx):
+                for j in e_idx:
                     rg.append(torch.arange(self.kb_range[j,0], self.kb_range[j,1]).long().to(device))
                 rg = torch.cat(rg, dim=0) # [rsz,]
-                rg = rg[:min(len(rg), 5 * self.max_active)] # limit the number of next-hop
+                # print(len(e_idx), len(rg))
+                if len(rg) > self.max_active: # limit the number of next-hop
+                    rg = rg[:self.max_active]
+                    # DOING
+                    # rg = rg[torch.randperm(len(rg))[:self.max_active]]
+                    cnt_trunc += 1
+                    # print('trunc: {}'.format(cnt_trunc))
 
+                # print('step {}, desc number {}'.format(t, len(rg)))
                 pair = self.kb_pair[rg] # [rsz, 2]
                 desc = self.kb_desc[rg] # [rsz, max_desc]
                 desc_lens = desc.size(1) - desc.eq(0).long().sum(dim=1)
@@ -112,13 +138,14 @@ class TransferNet(nn.Module):
                 act_desc = [' '.join([self.vocab['id2word'][w] for w in d if w > 0]) for d in desc[act_idx].tolist()]
                 path_infos[i][t] = [(act_pair[_][0], act_desc[_], act_pair[_][1]) for _ in range(len(act_pair))]
 
-            last_e = torch.stack(e_stack, dim=0)
-
+            new_e = torch.stack(e_stack, dim=0)
 
             # reshape >1 scores to 1 in a differentiable way
-            m = last_e.gt(1).float()
-            z = (m * last_e + (1-m)).detach()
-            last_e = last_e / z
+            m = new_e.gt(1).float()
+            z = (m * new_e + (1-m)).detach()
+            new_e = new_e / z
+
+            last_e = new_e
 
             # Specifically for MetaQA: reshape cycle entities to 0, because A-r->B-r_inv->A is not allowed
             if t > 0:
@@ -149,7 +176,6 @@ class TransferNet(nn.Module):
                 # print('block 2-hop topic')
         ent_m = hop2m.unsqueeze(1) * e_s
         last_e = (1-ent_m) * last_e
-
 
         # question mask, incorporate language bias
         q_mask = torch.sigmoid(self.q_classifier(q_embeddings))
