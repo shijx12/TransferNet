@@ -191,5 +191,70 @@ def main():
 
     embed()
 
+
+def build_vocab():
+    from nltk import word_tokenize
+    vocab = init_word2id()
+    fn = '/data/sjx/exp/TransferNet/HotpotQA/input/train.pt'
+    with open(fn, 'rb') as f:
+        data = pickle.load(f)
+
+    print('Build vocabulary')
+    word_counter = Counter()
+    for doc in tqdm(data):
+        for e in doc['entity']:
+            word_counter.update(word_tokenize(e))
+        for d in doc['kb_desc']:
+            word_counter.update(word_tokenize(d))
+        word_counter.update(word_tokenize(doc['question']))
+
+    min_cnt = 3
+    cnt = 0
+    for w, c in word_counter.items():
+        if w and c >= min_cnt:
+            add_item_to_x2id(w, vocab)
+        else:
+            cnt += 1
+    print('remove {} words whose frequency < {}'.format(cnt, min_cnt))
+    print('vocabulary size: {}'.format(len(vocab)))
+
+    with open('/data/sjx/exp/TransferNet/HotpotQA/input/vocab.json', 'w') as f:
+        json.dump(vocab, f)
+
+    def tokenize_encode_pad(sents, vocab):
+        if isinstance(sents, list):
+            sents = [word_tokenize(s) for s in sents]
+            max_l = max(len(s) for s in sents)
+            res = []
+            for s in sents:
+                s = [vocab.get(w, 0) for w in s] + [0]*(max_l-len(s))
+                res.append(s)
+            res = np.asarray(res, dtype=np.int32)
+            return res
+        elif isinstance(sents, str):
+            s = word_tokenize(sents)
+            s = [[vocab.get(w, 0) for w in s]]
+            s = np.asarray(s, dtype=np.int32)
+            return s
+
+    print('Encode train set')
+    for doc in tqdm(data):
+        doc['entity'] = tokenize_encode_pad(doc['entity'], vocab)
+        doc['kb_desc'] = tokenize_encode_pad(doc['kb_desc'], vocab)
+        doc['question'] = tokenize_encode_pad(doc['question'], vocab)
+    with open('/data/sjx/exp/TransferNet/HotpotQA/input/train_encode.pt', 'wb') as f:
+        pickle.dump(data, f)
+
+    print('Encode val set')
+    with open('/data/sjx/exp/TransferNet/HotpotQA/input/dev.pt', 'rb') as f:
+        data = pickle.load(f)
+    for doc in tqdm(data):
+        doc['entity'] = tokenize_encode_pad(doc['entity'], vocab)
+        doc['kb_desc'] = tokenize_encode_pad(doc['kb_desc'], vocab)
+        doc['question'] = tokenize_encode_pad(doc['question'], vocab)
+    with open('/data/sjx/exp/TransferNet/HotpotQA/input/dev_encode.pt', 'wb') as f:
+        pickle.dump(data, f)
+
 if __name__ == '__main__':
-    main()
+    # main()
+    build_vocab()

@@ -95,7 +95,7 @@ class TransferNet(nn.Module):
                 # e_idx = torch.topk(last_e[i], k=1, dim=0)[1].tolist() + \
                 #         last_e[i].gt(self.ent_act_thres).nonzero().squeeze(1).tolist()
                 # DOING
-                if self.training and t > 0 and random.random() < 0.05:
+                if self.training and t > 0 and random.random() < 0.005:
                     e_idx = last_e[i].gt(0).nonzero().squeeze(1).tolist()
                     random.shuffle(e_idx)
                 else:

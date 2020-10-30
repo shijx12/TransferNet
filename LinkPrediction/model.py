@@ -38,13 +38,15 @@ class TransferNet(nn.Module):
             self.step_encoders.append(m)
             self.add_module('step_encoders_{}'.format(i), m)
 
-        self.rel_classifier = nn.Linear(dim_hidden, 1)
-        # self.rel_classifier = nn.Linear(dim_hidden, num_relations)
+        # self.rel_classifier = nn.Linear(dim_hidden, 1)
+        self.rel_classifier = nn.Linear(dim_hidden, num_relations)
 
         self.relation_embeddings = nn.Embedding(num_relations, dim_hidden)
+        self.path_embeddings = nn.Embedding(num_relations, dim_hidden)
         self.entity_embeddings = nn.Embedding(num_entities, dim_hidden)
         nn.init.normal_(self.entity_embeddings.weight, mean=0, std=1/math.sqrt(dim_hidden))
         nn.init.normal_(self.relation_embeddings.weight, mean=0, std=1/math.sqrt(dim_hidden))
+        nn.init.normal_(self.path_embeddings.weight, mean=0, std=1/math.sqrt(dim_hidden))
 
         for m in self.modules():
             if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
@@ -75,37 +77,40 @@ class TransferNet(nn.Module):
 
         for t in range(self.num_steps):
             cq_t = self.step_encoders[t](q_emb) # [bsz, dim_h]
-
+            rel_dist = torch.sigmoid(self.rel_classifier(cq_t)) # [bsz, num_relations]
             
             e_stack = []
             hist_stack = []
             for i in range(bsz):
                 # e_idx = torch.topk(last_e[i], k=1, dim=0)[1].tolist() + \
                 #         last_e[i].gt(self.ent_act_thres).nonzero().squeeze(1).tolist()
+                
                 # DOING
-                sort_score, sort_idx = torch.sort(last_e[i], dim=0, descending=True)
-                e_idx = sort_idx[sort_score.gt(self.ent_act_thres)].tolist()
-                e_idx = set(e_idx) - set([0])
-                if len(e_idx) == 0:
-                    # print('no active entity at step {}'.format(t))
-                    pad = sort_idx[0].item()
-                    if pad == 0:
-                        pad = sort_idx[1].item()
-                    e_idx = set([pad])
+                # sort_score, sort_idx = torch.sort(last_e[i], dim=0, descending=True)
+                # e_idx = sort_idx[sort_score.gt(self.ent_act_thres)].tolist()
+                # e_idx = set(e_idx) - set([0])
+                # if len(e_idx) == 0:
+                #     # print('no active entity at step {}'.format(t))
+                #     pad = sort_idx[0].item()
+                #     if pad == 0:
+                #         pad = sort_idx[1].item()
+                #     e_idx = set([pad])
+                # rg = []
+                # for j in set(e_idx):
+                #     rg.append(torch.arange(self.kb_range[j,0], self.kb_range[j,1]).long().to(device))
+                # rg = torch.cat(rg, dim=0) # [rsz,]
+                # if len(rg) > self.max_active: # limit the number of next-hop
+                #     rg = rg[:self.max_active]
+                # # candidate triples to transfer
+                # triples = self.kb_triple[rg] # [rsz, 3]
 
-                rg = []
-                for j in set(e_idx):
-                    rg.append(torch.arange(self.kb_range[j,0], self.kb_range[j,1]).long().to(device))
-                rg = torch.cat(rg, dim=0) # [rsz,]
-
-                # print(len(e_idx), len(rg))
-                if len(rg) > self.max_active: # limit the number of next-hop
-                    # DOING
-                    rg = rg[:self.max_active]
-                    # rg = rg[torch.randperm(len(rg))[:self.max_active]]
-
-                # candidate triples to transfer
-                triples = self.kb_triple[rg] # [rsz, 3]
+                # DOING sort rg with last_e * rel_dist, using simple-learned rel_dist as indicator
+                triples = self.kb_triple
+                sub, obj, rel = triples[:,0], triples[:,1], triples[:,2]
+                coarse_score = last_e[i][sub].detach() * rel_dist[i][rel].detach()
+                top_idx = torch.topk(coarse_score, k=self.max_active, dim=0)[1]
+                triples = triples[top_idx]
+                
                 if self.training:
                     # remove the direct target link
                     sub, rel = triples[:,0], triples[:,2]
@@ -114,16 +119,16 @@ class TransferNet(nn.Module):
                 sub, obj, rel = triples[:,0], triples[:,1], triples[:,2]
 
                 sub_feat = torch.index_select(hist_emb[i], 0, sub) # [rsz, dim_h]
-                rel_feat = self.relation_embeddings(rel) # [rsz, dim_h]
+                rel_feat = self.path_embeddings(rel) # [rsz, dim_h]
                 trans_feat = self.path_encoder.forward_one_step(
                     rel_feat.unsqueeze(1), 
                     sub_feat.unsqueeze(0))[0].squeeze(1) # [rsz, dim_h]
                 trans_prob = torch.sigmoid(
-                    self.rel_classifier(
-                        trans_feat * cq_t[i:i+1]
-                        # trans_feat * q_emb[i:i+1]
+                    torch.sum(
+                        trans_feat * cq_t[i:i+1].detach(),
+                        dim=1
                         )
-                    ).squeeze(1) # [rsz,]
+                    ) # [rsz,]
 
                 # transfer probability
                 obj_p = last_e[i][sub] * trans_prob
@@ -149,6 +154,7 @@ class TransferNet(nn.Module):
             last_e = torch.stack(e_stack, dim=0)
             hist_emb = torch.stack(hist_stack, dim=0)
             
+
 
             '''
             rel_dist = torch.sigmoid(self.rel_classifier(cq_t)) # [bsz, num_relations]

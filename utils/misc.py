@@ -6,6 +6,7 @@ import numpy as np
 import torch.nn as nn
 import math
 from torch.optim.optimizer import Optimizer
+import transformers
 
 DUMMY_RELATION = 'DUMMY_RELATION'
 DUMMY_ENTITY = 'DUMMY_ENTITY'
@@ -16,6 +17,17 @@ DUMMY_ENTITY_ID = 0
 EPSILON = float(np.finfo(float).eps)
 HUGE_INT = 1e31
 
+def batch_device(batch, device):
+    res = []
+    for x in batch:
+        if isinstance(x, torch.Tensor):
+            x = x.to(device)
+        elif isinstance(x, (dict, transformers.tokenization_utils_base.BatchEncoding)):
+            for k in x:
+                if isinstance(x[k], torch.Tensor):
+                    x[k] = x[k].to(device)
+        res.append(x)
+    return res
 
 def idx_to_one_hot(idx, size):
     """
