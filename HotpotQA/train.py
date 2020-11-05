@@ -7,6 +7,7 @@ import shutil
 import numpy as np
 from tqdm import tqdm
 import time
+from collections import defaultdict
 from utils.misc import MetricLogger, load_glove, idx_to_one_hot, batch_device, RAdam
 
 from transformers import AutoTokenizer
@@ -30,34 +31,41 @@ def train(args):
     tokenizer = None
 
     logging.info("Create train_loader, val_loader.........")
-    train_pt = os.path.join(args.input_dir, 'train.pt')
-    val_pt = os.path.join(args.input_dir, 'dev.pt')
+    # train_pt = os.path.join(args.input_dir, 'train.pt')
+    # val_pt = os.path.join(args.input_dir, 'dev.pt')
+    train_pt = os.path.join(args.input_dir, 'train_encode.pt')
+    val_pt = os.path.join(args.input_dir, 'dev_encode.pt')
     vocab_json = os.path.join(args.input_dir, 'vocab.json')
     train_loader = DataLoader(train_pt, vocab_json, tokenizer, args.batch_size, training=True)
     val_loader = DataLoader(val_pt, vocab_json, tokenizer, args.batch_size)
-
+    vocab = train_loader.vocab
+    
     logging.info("Create model.........")
-    model = TransferNet(args)
+    model = TransferNet(args, vocab)
+    if args.glove_pt:
+        pretrained = load_glove(args.glove_pt, vocab['id2word'])
+        model.word_embeddings.weight.data = torch.Tensor(pretrained)
     if not args.ckpt == None:
         logging.info("Load ckpt from {}".format(args.ckpt))
         model.load_state_dict(torch.load(args.ckpt))
     model = model.to(device)
     logging.info(model)
 
-    no_decay = ["bias", "LayerNorm.weight"]
-    bert_param = [(n,p) for n,p in model.named_parameters() if n.startswith('bert_encoder')]
-    other_param = [(n,p) for n,p in model.named_parameters() if not n.startswith('bert_encoder')]
-    print('number of bert param: {}'.format(len(bert_param)))
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in bert_param if not any(nd in n for nd in no_decay)],
-         'weight_decay': args.weight_decay, 'lr': args.bert_lr},
-        {'params': [p for n, p in bert_param if any(nd in n for nd in no_decay)], 
-        'weight_decay': 0.0, 'lr': args.bert_lr},
-        {'params': [p for n, p in other_param if not any(nd in n for nd in no_decay)],
-         'weight_decay': args.weight_decay, 'lr': args.lr},
-        {'params': [p for n, p in other_param if any(nd in n for nd in no_decay)], 
-        'weight_decay': 0.0, 'lr': args.lr},
-        ]
+    # no_decay = ["bias", "LayerNorm.weight"]
+    # bert_param = [(n,p) for n,p in model.named_parameters() if n.startswith('bert_encoder')]
+    # other_param = [(n,p) for n,p in model.named_parameters() if not n.startswith('bert_encoder')]
+    # print('number of bert param: {}'.format(len(bert_param)))
+    # optimizer_grouped_parameters = [
+    #     {'params': [p for n, p in bert_param if not any(nd in n for nd in no_decay)],
+    #      'weight_decay': args.weight_decay, 'lr': args.bert_lr},
+    #     {'params': [p for n, p in bert_param if any(nd in n for nd in no_decay)], 
+    #     'weight_decay': 0.0, 'lr': args.bert_lr},
+    #     {'params': [p for n, p in other_param if not any(nd in n for nd in no_decay)],
+    #      'weight_decay': args.weight_decay, 'lr': args.lr},
+    #     {'params': [p for n, p in other_param if any(nd in n for nd in no_decay)], 
+    #     'weight_decay': 0.0, 'lr': args.lr},
+    #     ]
+    optimizer_grouped_parameters = [{'params':model.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr}]
     if args.opt == 'adam':
         optimizer = optim.Adam(optimizer_grouped_parameters)
     elif args.opt == 'radam':
@@ -68,7 +76,7 @@ def train(args):
         raise NotImplementedError
 
     meters = MetricLogger(delimiter="  ")
-    # validate(args, model, val_loader, device)
+    validate(args, model, val_loader, device)
     logging.info("Start training........")
 
     for epoch in range(args.num_epoch):
@@ -76,7 +84,13 @@ def train(args):
         for iteration, batch in enumerate(train_loader):
             iteration = iteration + 1
 
-            loss = model(*batch_device(batch, device))
+            loss = defaultdict(list)
+            for b in batch:
+                single_loss = model(*batch_device(b, device))
+                for k,v in single_loss.items():
+                    loss[k].append(v)
+            for k in loss:
+                loss[k] = sum(loss[k])/len(loss[k])
             optimizer.zero_grad()
             if isinstance(loss, dict):
                 total_loss = sum(loss.values())
@@ -86,11 +100,11 @@ def train(args):
                 meters.update(loss=loss.item())
             total_loss.backward()
             nn.utils.clip_grad_value_(model.parameters(), 0.5)
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            nn.utils.clip_grad_norm_(model.parameters(), 2.0)
             optimizer.step()
 
-            # if iteration % (len(train_loader) // 100) == 0:
-            if True:
+            if iteration % (len(train_loader) // 100) == 0:
+            # if True:
                 logging.info(
                     meters.delimiter.join(
                         [
@@ -107,8 +121,8 @@ def train(args):
         
         acc = validate(args, model, val_loader, device)
         logging.info(acc)
-        scheduler.step(acc['f1'])
-        torch.save(model.state_dict(), os.path.join(args.save_dir, 'model_epoch-{}_acc-{:.4f}.pt'.format(epoch, acc['all'])))
+        # scheduler.step(acc['f1'])
+        torch.save(model.state_dict(), os.path.join(args.save_dir, 'model_epoch-{}_f1-{:.4f}.pt'.format(epoch, acc['f1'])))
         
 
 def main():
@@ -116,13 +130,14 @@ def main():
     # input and output
     parser.add_argument('--input_dir', required=True)
     parser.add_argument('--save_dir', required=True, help='path to save checkpoints and logs')
+    parser.add_argument('--glove_pt', default='/data/sjx/glove.840B.300d.py36.pt')
     parser.add_argument('--ckpt', default = None)
     # training parameters
     parser.add_argument('--bert_lr', default=3e-5, type=float)
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--weight_decay', default=1e-5, type=float)
     parser.add_argument('--num_epoch', default=20, type=int)
-    parser.add_argument('--batch_size', default=64, type=int)
+    parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='radam', type = str)
     # model hyperparameters

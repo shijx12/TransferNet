@@ -25,7 +25,7 @@ def validate(args, model, data, device, verbose = False):
             e_score = outputs['e_score'].cpu()
             sort_idx = torch.argsort(e_score, dim=1, descending=True)
 
-            for i in range(len(batch)):
+            for i in range(len(sub)):
                 answer = set([_ for _ in obj[i].tolist() if _ > 0])
                 count += len(answer)
                 for k in (1, 5, 10):
@@ -64,7 +64,8 @@ def main():
     parser.add_argument('--mode', default='val', choices=['val', 'vis', 'test'])
     # model hyperparameters
     parser.add_argument('--num_steps', default=3, type=int)
-    parser.add_argument('--max_active', default=50, type=int, help='max number of active entities at each step')
+    parser.add_argument('--ent_act_thres', default=0.7, type=float, help='activate an entity when its score exceeds this value')
+    parser.add_argument('--max_active', default=2000, type=int, help='max number of active entities at each step')
     parser.add_argument('--dim_hidden', default=100, type=int)
     args = parser.parse_args()
 
@@ -77,7 +78,11 @@ def main():
     vocab = val_loader.vocab
 
     model = TransferNet(args, vocab)
-    model.load_state_dict(torch.load(args.ckpt))
+    missing, unexpected = model.load_state_dict(torch.load(args.ckpt), strict=False)
+    if missing:
+        print("Missing keys: {}".format("; ".join(missing)))
+    if unexpected:
+        print("Unexpected keys: {}".format("; ".join(unexpected)))
     model = model.to(device)
     model.kb_triple = model.kb_triple.to(device)
     model.kb_range = model.kb_range.to(device)

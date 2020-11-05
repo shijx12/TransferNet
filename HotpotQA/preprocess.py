@@ -208,7 +208,7 @@ def build_vocab():
             word_counter.update(word_tokenize(d))
         word_counter.update(word_tokenize(doc['question']))
 
-    min_cnt = 3
+    min_cnt = 2
     cnt = 0
     for w, c in word_counter.items():
         if w and c >= min_cnt:
@@ -227,13 +227,13 @@ def build_vocab():
             max_l = max(len(s) for s in sents)
             res = []
             for s in sents:
-                s = [vocab.get(w, 0) for w in s] + [0]*(max_l-len(s))
+                s = [vocab.get(w, vocab.get('<UNK>')) for w in s] + [0]*(max_l-len(s))
                 res.append(s)
             res = np.asarray(res, dtype=np.int32)
             return res
         elif isinstance(sents, str):
             s = word_tokenize(sents)
-            s = [[vocab.get(w, 0) for w in s]]
+            s = [[vocab.get(w, vocab.get('<UNK>')) for w in s]]
             s = np.asarray(s, dtype=np.int32)
             return s
 

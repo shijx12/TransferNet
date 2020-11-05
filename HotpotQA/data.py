@@ -5,7 +5,7 @@ import numpy as np
 
 
 def collate(batch):
-    return batch[0]
+    return batch
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -13,13 +13,12 @@ class Dataset(torch.utils.data.Dataset):
         self.data = data
         self.tokenizer = tokenizer
         self.vocab = vocab
-        self.id2word = {v:k for k,v in vocab.items()}
 
     def __getitem__(self, index):
         entity = self.data[index]['entity']
         # origin_entity = entity
         # entity = self.tokenizer(entity, padding=True, return_tensors="pt")
-        origin_entity = [' '.join([self.id2word[i] for i in idxs if i > 0]) for idxs in entity]
+        origin_entity = [' '.join([self.vocab['id2word'][i] for i in idxs if i > 0]) for idxs in entity]
         entity = torch.LongTensor(entity)
 
         kb_pair = self.data[index]['kb_pair']
@@ -46,15 +45,27 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class DataLoader(torch.utils.data.DataLoader):
-    def __init__(self, question_pt, vocab_json, tokenizer, batch_size=1, training=False):
+    def __init__(self, question_pt, vocab_json, tokenizer, batch_size, training=False):
         
         with open(question_pt, 'rb') as f:
             data = pickle.load(f)
 
         with open(vocab_json) as f:
-            vocab = json.load(f)
+            word2id = json.load(f)
+            id2word = {v:k for k,v in word2id.items()}
+            vocab = {
+                'word2id': word2id,
+                'id2word': id2word
+            }
 
-        print('data number: {}'.format(len(data)))
+        # filter empty entity
+        filter_idx = set()
+        for i in range(len(data)):
+            if any(data[i]['entity'].sum(1)==0):
+                filter_idx.add(i)
+        data = [data[i] for i in range(len(data)) if i not in filter_idx]
+
+        print('data number: {}, filter empty: {}'.format(len(data), len(filter_idx)))
 
         dataset = Dataset(data, vocab, tokenizer)
 
@@ -65,3 +76,4 @@ class DataLoader(torch.utils.data.DataLoader):
             shuffle=shuffle,
             collate_fn=collate, 
             )
+        self.vocab = vocab

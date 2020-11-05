@@ -95,19 +95,19 @@ class TransferNet(nn.Module):
                 # e_idx = torch.topk(last_e[i], k=1, dim=0)[1].tolist() + \
                 #         last_e[i].gt(self.ent_act_thres).nonzero().squeeze(1).tolist()
                 # DOING
-                if self.training and t > 0 and random.random() < 0.005:
-                    e_idx = last_e[i].gt(0).nonzero().squeeze(1).tolist()
-                    random.shuffle(e_idx)
-                else:
-                    sort_score, sort_idx = torch.sort(last_e[i], dim=0, descending=True)
-                    e_idx = sort_idx[sort_score.gt(self.ent_act_thres)].tolist()
-                    e_idx = set(e_idx) - set([0])
-                    if len(e_idx) == 0:
-                        # print('no active entity at step {}'.format(t))
-                        pad = sort_idx[0].item()
-                        if pad == 0:
-                            pad = sort_idx[1].item()
-                        e_idx = set([pad])
+                # if self.training and t > 0 and random.random() < 0.005:
+                #     e_idx = last_e[i].gt(0).nonzero().squeeze(1).tolist()
+                #     random.shuffle(e_idx)
+                # else:
+                sort_score, sort_idx = torch.sort(last_e[i], dim=0, descending=True)
+                e_idx = sort_idx[sort_score.gt(self.ent_act_thres)].tolist()
+                e_idx = set(e_idx) - set([0])
+                if len(e_idx) == 0:
+                    # print('no active entity at step {}'.format(t))
+                    pad = sort_idx[0].item()
+                    if pad == 0:
+                        pad = sort_idx[1].item()
+                    e_idx = set([pad])
 
                 rg = []
                 for j in e_idx:

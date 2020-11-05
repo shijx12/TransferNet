@@ -16,7 +16,8 @@ class TransferNet(nn.Module):
         self.args = args
         dim_word = args.dim_word
         dim_hidden = args.dim_hidden
-        num_words = len(vocab)
+        num_words = len(vocab['word2id'])
+        self.vocab = vocab
 
         # self.bert_encoder = AutoModel.from_pretrained(args.bert_type, return_dict=True)
         # dim_hidden = self.bert_encoder.config.hidden_size
@@ -83,6 +84,7 @@ class TransferNet(nn.Module):
         last_e = None
         word_attns = []
         ent_probs = []
+        path_infos = [None]*self.num_steps # [num_steps]
 
         for t in range(self.num_steps):
             cq_t = self.step_encoders[t](q_emb) # [1, dim_h]
@@ -94,17 +96,24 @@ class TransferNet(nn.Module):
 
             if t == 0:
                 last_e = torch.softmax(torch.sum(ent_emb * ctx_h, 1), 0) # (num_ent)
+
+                if not self.training:
+                    path_infos[t] = [origin_entity[last_e.argmax(0).item()]]
             else:
                 d_logit = self.rel_classifier(ctx_h * desc_emb).squeeze(1) # (num_kb,)
                 d_prob = torch.sigmoid(d_logit) # (num_kb,)
                 # transfer probability
                 last_e = self.follow(last_e, kb_pair, d_prob)
 
-                # collect path
-                # act_idx = d_prob.gt(0.9)
-                # act_pair = pair[act_idx].tolist()
-                # act_desc = [' '.join([self.vocab['id2word'][w] for w in d if w > 0]) for d in desc[act_idx].tolist()]
-                # path_infos[i][t] = [(act_pair[_][0], act_desc[_], act_pair[_][1]) for _ in range(len(act_pair))]
+                if not self.training:
+                    # collect path
+                    act_idx = d_prob.gt(0.8)
+                    act_pair = kb_pair[act_idx].tolist()
+                    act_desc = [' '.join([self.vocab['id2word'][w] for w in d if w > 0]) for d in kb_desc[act_idx].tolist()]
+                    path_infos[t] = [
+                        '{} ---> {} ---> {}: {:.3f}'.format(
+                            origin_entity[act_pair[_][0]], act_desc[_], origin_entity[act_pair[_][1]], d_prob[act_idx][_].item()) 
+                        for _ in range(len(act_pair))]
 
 
             # reshape >1 scores to 1 in a differentiable way
@@ -122,8 +131,9 @@ class TransferNet(nn.Module):
         binary_prob = torch.sigmoid(self.binary_indicator(q_emb)).squeeze(1) # (1,)
         
         ent_probs[-1] = last_e.detach() # use the newest last_e
-        if gold_answer is None:
-            if binary_prob.item() > 0.5:
+        if not self.training:
+            # if binary_prob.item() > 0.5:
+            if False:
                 total_attn = last_e.sum().item()
                 if total_attn >= 1:
                     pred_answer = 'yes'
@@ -135,6 +145,7 @@ class TransferNet(nn.Module):
                 'pred': pred_answer,
                 'word_attns': word_attns,
                 'ent_probs': ent_probs,
+                'path_infos': path_infos
             }
         else:
             if gold_answer in {'yes', 'no'}:
@@ -143,11 +154,14 @@ class TransferNet(nn.Module):
                 ans_loss = torch.abs(total_attn - target)
                 bin_target = 1
             else:
+                answer_idx = torch.LongTensor(1,1).fill_(answer_idx)
                 answer_onehot = idx_to_one_hot(answer_idx, len(last_e)).to(last_e.device)
-                weight = answer_onehot * 9 + 1
+                # weight = answer_onehot * 9 + 1
+                weight = 1
                 ans_loss = torch.mean(weight * torch.pow(last_e - answer_onehot, 2))
                 bin_target = 0
 
             bin_loss = torch.abs(binary_prob - bin_target)
 
-            return {'ans_loss': ans_loss, 'bin_loss': bin_loss}
+            # return {'ans_loss': ans_loss, 'bin_loss': bin_loss}
+            return {'ans_loss': ans_loss}
