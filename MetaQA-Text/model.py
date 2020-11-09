@@ -15,6 +15,7 @@ class TransferNet(nn.Module):
         self.vocab = vocab
         self.max_active = args.max_active
         self.ent_act_thres = args.ent_act_thres
+        self.aux_hop = args.aux_hop
         dim_word = args.dim_word
         dim_hidden = args.dim_hidden
         
@@ -44,11 +45,11 @@ class TransferNet(nn.Module):
 
         self.q_classifier = nn.Linear(dim_hidden, num_entities)
 
-        for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight)
-                if m.bias is not None:
-                    m.bias.data.zero_()
+        # for m in self.modules():
+        #     if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+        #         nn.init.kaiming_normal_(m.weight)
+        #         if m.bias is not None:
+        #             m.bias.data.zero_()
 
     def follow(self, e, pair, p):
         """
@@ -63,7 +64,7 @@ class TransferNet(nn.Module):
         return out
         
 
-    def forward(self, questions, e_s, answers = None):
+    def forward(self, questions, e_s, answers=None, hop=None):
         question_lens = questions.size(1) - questions.eq(0).long().sum(dim=1) # 0 means <PAD>
         q_word_emb = self.word_dropout(self.word_embeddings(questions)) # [bsz, max_q, dim_hidden]
         q_word_h, q_embeddings, q_hn = self.question_encoder(q_word_emb, question_lens) # [bsz, max_q, dim_h], [bsz, dim_h], [num_layers, bsz, dim_h]
@@ -80,6 +81,11 @@ class TransferNet(nn.Module):
             path_infos.append([])
             for j in range(self.num_steps):
                 path_infos[i].append(None)
+
+        if self.training and self.aux_hop:
+            self_acc = []
+            for i in range(bsz):
+                self_acc.append(torch.tensor(0.0).to(device))
 
         for t in range(self.num_steps):
             cq_t = self.step_encoders[t](q_embeddings) # [bsz, dim_h]
@@ -138,6 +144,17 @@ class TransferNet(nn.Module):
                 act_desc = [' '.join([self.vocab['id2word'][w] for w in d if w > 0]) for d in desc[act_idx].tolist()]
                 path_infos[i][t] = [(act_pair[_][0], act_desc[_], act_pair[_][1]) for _ in range(len(act_pair))]
 
+                # 
+                if self.training and self.aux_hop:
+                    self_mask = desc[:,0].eq(self.vocab['word2id']['__self_rel__'])
+                    self_prob = d_prob[self_mask]
+                    if len(self_prob) > 0:
+                        self_prob = self_prob.mean()
+                    else:
+                        self_prob = 0
+                    self_acc[i] = self_acc[i] + self_prob
+
+
             new_e = torch.stack(e_stack, dim=0)
 
             # reshape >1 scores to 1 in a differentiable way
@@ -183,16 +200,23 @@ class TransferNet(nn.Module):
 
 
         ent_probs[-1] = last_e.detach() # use the newest last_e
-        if answers is None:
+        
+        if not self.training:
             return {
                 'e_score': last_e,
                 'word_attns': word_attns,
                 'ent_probs': ent_probs,
                 'path_infos': path_infos
             }
+        else:
+            weight = answers * 9 + 1
+            loss_score = torch.mean(weight * torch.pow(last_e - answers, 2))
 
-        # Distance loss
-        weight = answers * 9 + 1
-        loss_score = torch.mean(weight * torch.pow(last_e - answers, 2))
+            loss = {'loss_score': loss_score}
 
-        return {'loss_score': loss_score}
+            if self.aux_hop:
+                self_acc = torch.stack(self_acc)
+                loss_hop = torch.mean(torch.pow(self_acc - (3 - hop.float()), 2))
+                loss['loss_hop'] = 0.01 * loss_hop
+
+            return loss

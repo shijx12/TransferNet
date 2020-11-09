@@ -25,7 +25,7 @@ torch.set_num_threads(1) # avoid using multiple cpus
 def train(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    ent2id, rel2id, triples, train_loader, val_loader = load_data(args.input_dir, args.batch_size)
+    ent2id, rel2id, triples, train_loader, val_loader = load_data(args.input_dir, args.bert_name, args.batch_size)
     logging.info("Create model.........")
     model = TransferNet(args, ent2id, rel2id, triples)
     if not args.ckpt == None:
@@ -58,13 +58,11 @@ def train(args):
         optimizer = optim.Adam(optimizer_grouped_parameters)
     elif args.opt == 'radam':
         optimizer = RAdam(optimizer_grouped_parameters)
-        # optimizer = RAdam(model.parameters(), args.lr, weight_decay=args.weight_decay)
     elif args.opt == 'sgd':
         optimizer = optim.SGD(optimizer_grouped_parameters)
     else:
         raise NotImplementedError
     args.warmup_steps = int(t_total * args.warmup_proportion)
-    # optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total)
     meters = MetricLogger(delimiter="  ")
     # validate(args, model, val_loader, device)
@@ -125,8 +123,8 @@ def main():
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='radam', type = str)
     parser.add_argument('--warmup_proportion', default=0.1, type = float)
-    # model hyperparameters
-    parser.add_argument('--num_steps', default=2, type=int)
+    # model parameters
+    parser.add_argument('--bert_name', default='bert-base-uncased', choices=['roberta-base', 'bert-base-uncased'])
     args = parser.parse_args()
 
     # make logging.info display into both shell and file

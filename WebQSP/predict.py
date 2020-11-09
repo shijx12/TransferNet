@@ -15,6 +15,7 @@ def validate(args, model, data, device, verbose = False):
     model.eval()
     count = 0
     correct = 0
+    hop_count = defaultdict(list)
     with torch.no_grad():
         for batch in tqdm(data, total=len(data)):
             outputs = model(*batch_device(batch, device)) # [bsz, Esize]
@@ -23,6 +24,9 @@ def validate(args, model, data, device, verbose = False):
             match_score = torch.gather(batch[2], 1, idx.unsqueeze(-1)).squeeze().tolist()
             count += len(match_score)
             correct += sum(match_score)
+            for i in range(len(match_score)):
+                h = outputs['hop_attn'][i].argmax().item()
+                hop_count[h].append(match_score[i])
 
             if verbose:
                 answers = batch[2]
@@ -34,24 +38,32 @@ def validate(args, model, data, device, verbose = False):
                         print(' '.join(question_tokens))
                         topic_id = batch[0][i].argmax(0).item()
                         print('> topic entity: {}'.format(data.id2ent[topic_id]))
-                        for t in range(args.num_steps):
+                        for t in range(2):
                             print('>>>>>>> step {}'.format(t))
                             tmp = ' '.join(['{}: {:.3f}'.format(x, y) for x,y in 
                                 zip(question_tokens, outputs['word_attns'][t][i].tolist())])
                             print('> Attention: ' + tmp)
                             print('> Relation:')
-                            rel_p, rel_idx = outputs['rel_probs'][t][i].topk(3)
-                            for x, y in zip(rel_idx, rel_p):
-                                print('  {}: {:.3f}'.format(data.id2rel[x.item()], y))
+                            rel_idx = outputs['rel_probs'][t][i].gt(0.9).nonzero().squeeze(1).tolist()
+                            for x in rel_idx:
+                                print('  {}: {:.3f}'.format(data.id2rel[x], outputs['rel_probs'][t][i][x].item()))
 
                             print('> Entity: {}'.format('; '.join([data.id2ent[_] for _ in outputs['ent_probs'][t][i].gt(0.8).nonzero().squeeze(1).tolist()])))
                         print('----')
                         print('> max is {}'.format(data.id2ent[idx[i].item()]))
                         print('> golden: {}'.format('; '.join([data.id2ent[_] for _ in answers[i].gt(0.9).nonzero().squeeze(1).tolist()])))
                         print('> prediction: {}'.format('; '.join([data.id2ent[_] for _ in e_score[i].gt(0.9).nonzero().squeeze(1).tolist()])))
+                        print(' '.join(question_tokens))
+                        print(outputs['hop_attn'][i].tolist())
                         embed()
     acc = correct / count
     print(acc)
+    print('pred hop accuracy: 1-hop {} (total {}), 2-hop {} (total {})'.format(
+        sum(hop_count[0])/(len(hop_count[0])+0.1),
+        len(hop_count[0]),
+        sum(hop_count[1])/(len(hop_count[1])+0.1),
+        len(hop_count[1]),
+        ))
     return acc
 
 
@@ -61,12 +73,10 @@ def main():
     parser.add_argument('--input_dir', default = './input')
     parser.add_argument('--ckpt', required = True)
     parser.add_argument('--mode', default='val', choices=['val', 'vis', 'test'])
-    # model hyperparameters
-    parser.add_argument('--num_steps', default=2, type=int)
     args = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    ent2id, rel2id, triples, train_loader, val_loader = load_data(args.input_dir, 8)
+    ent2id, rel2id, triples, train_loader, val_loader = load_data(args.input_dir, 16)
 
     model = TransferNet(args, ent2id, rel2id, triples)
     missing, unexpected = model.load_state_dict(torch.load(args.ckpt), strict=False)

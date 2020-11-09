@@ -79,7 +79,8 @@ def train(args):
             topic_entity = idx_to_one_hot(topic_entity, len(vocab['entity2id'])).to(device)
             answer = idx_to_one_hot(answer, len(vocab['entity2id'])).to(device)
             answer[:, 0] = 0
-            loss = model(question, topic_entity, answer)
+            hop = hop.to(device)
+            loss = model(question, topic_entity, answer, hop)
             optimizer.zero_grad()
             if isinstance(loss, dict):
                 total_loss = sum(loss.values())
@@ -129,6 +130,7 @@ def main():
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='radam', type = str)
+    parser.add_argument('--aux_hop', action='store_true', help='utilize question hop to constrain the probability of self relation')
     parser.add_argument('--curriculum', default=0, type=int, help='whether use curriculum learning, 0 means not')
     parser.add_argument('--stop_curri_epo', default=3, type=int, help='at which epoch currirulum learning stops')
     # model hyperparameters

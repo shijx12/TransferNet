@@ -14,7 +14,7 @@ def load_vocab(path):
 def collate(batch):
     batch = list(zip(*batch))
     question, topic_entity, answer = list(map(torch.stack, batch[:3]))
-    hop = batch[3]
+    hop = torch.LongTensor(batch[3])
     return question, topic_entity, answer, hop
 
 

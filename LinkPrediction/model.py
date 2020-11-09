@@ -56,11 +56,6 @@ class TransferNet(nn.Module):
         nn.init.normal_(self.relation_embeddings.weight, mean=0, std=1/math.sqrt(dim_hidden))
         nn.init.normal_(self.path_embeddings.weight, mean=0, std=1/math.sqrt(dim_hidden))
 
-        for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight)
-                if m.bias is not None:
-                    m.bias.data.zero_()
 
     def forward(self, start, query, answer = None):
         '''

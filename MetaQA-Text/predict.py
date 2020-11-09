@@ -24,6 +24,7 @@ def validate(args, model, data, device, verbose = False):
             answers[:, 0] = 0
             questions = questions.to(device)
             topic_entities = topic_entities.to(device)
+            hops = hops.tolist()
             outputs = model(questions, topic_entities) # [bsz, Esize]
             e_score = outputs['e_score'].cpu()
             scores, idx = torch.max(e_score, dim = 1) # [bsz], [bsz]
