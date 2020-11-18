@@ -31,7 +31,7 @@ def train(args):
     if not args.ckpt == None:
         model.load_state_dict(torch.load(args.ckpt))
     model = model.to(device)
-    model.triples = model.triples.to(device)
+    # model.triples = model.triples.to(device)
     model.Msubj = model.Msubj.to(device)
     model.Mobj = model.Mobj.to(device)
     model.Mrel = model.Mrel.to(device)
@@ -75,7 +75,10 @@ def train(args):
             loss = model(*batch_device(batch, device))
             optimizer.zero_grad()
             if isinstance(loss, dict):
-                total_loss = sum(loss.values())
+                if len(loss) > 1:
+                    total_loss = sum(loss.values())
+                else:
+                    total_loss = loss[list(loss.keys())[0]]
                 meters.update(**{k:v.item() for k,v in loss.items()})
             else:
                 total_loss = loss
@@ -106,7 +109,6 @@ def train(args):
             acc = validate(args, model, val_loader, device)
             logging.info(acc)
             torch.save(model.state_dict(), os.path.join(args.save_dir, 'model-{}-{:.4f}.pt'.format(epoch, acc)))
-        
 
 def main():
     parser = argparse.ArgumentParser()

@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+import numpy as np
 import argparse
 from tqdm import tqdm
 from collections import defaultdict
@@ -24,43 +25,41 @@ def validate(args, model, data, device, verbose = False):
             answers[:, 0] = 0
             questions = questions.to(device)
             topic_entities = topic_entities.to(device)
+            hops = hops.tolist()
             outputs = model(questions, topic_entities) # [bsz, Esize]
             e_score = outputs['e_score'].cpu()
             scores, idx = torch.max(e_score, dim = 1) # [bsz], [bsz]
             match_score = torch.gather(answers, 1, idx.unsqueeze(-1)).squeeze().tolist()
-            scores_prob, idx_prob = torch.max(outputs['pred_e'].cpu(), dim = 1) # [bsz], [bsz]
-            match_prob = torch.gather(answers, 1, idx_prob.unsqueeze(-1)).squeeze().tolist()
-            for n, match in zip(['score', 'prob'], [match_score, match_prob]):
-                for h, m in zip(hops, match):
-                    count['{}-all'.format(n)] += 1
-                    count['{}-{}-hop'.format(n, h)] += 1
-                    correct['{}-all'.format(n)] += m
-                    correct['{}-{}-hop'.format(n, h)] += m
+            for h, m in zip(hops, match_score):
+                count['all'] += 1
+                count['{}-hop'.format(h)] += 1
+                correct['all'] += m
+                correct['{}-hop'.format(h)] += m
             if verbose:
                 for i in range(len(answers)):
-                    if answers[i][idx[i]].item() == 0:
-                        # if hops[i] == 1:
-                        #     continue
-                        print('================================================================')
-                        question = ' '.join([vocab['id2word'][_] for _ in questions.tolist()[i] if _ > 0])
-                        print(question)
-                        print('hop: {}'.format(hops[i]))
-                        print('> topic entity: {}'.format(vocab['id2entity'][topic_entities[i].max(0)[1].item()]))
-                        for t in range(args.num_steps):
-                            print('> > > step {}'.format(t))
-                            tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2word'][x], y) for x,y in 
-                                zip(questions.tolist()[i], outputs['word_attns'][t].tolist()[i]) 
-                                if x > 0])
-                            print('> ' + tmp)
-                            tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2relation'][x], y) for x,y in 
-                                enumerate(outputs['rel_probs'][t].tolist()[i])])
-                            print('> ' + tmp)
-                            print('> entity: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if outputs['ent_probs'][t+1][i][_].item() > 0.9])))
-                        print('----')
-                        print('> max is {}'.format(vocab['id2entity'][idx[i].item()]))
-                        print('> golden: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if answers[i][_].item() == 1])))
-                        print('> prediction: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if e_score[i][_].item() > 0.9])))
-                        embed()
+                    # if answers[i][idx[i]].item() == 0:
+                    if hops[i] != 3:
+                        continue
+                    print('================================================================')
+                    question = ' '.join([vocab['id2word'][_] for _ in questions.tolist()[i] if _ > 0])
+                    print(question)
+                    print('hop: {}'.format(hops[i]))
+                    print('> topic entity: {}'.format(vocab['id2entity'][topic_entities[i].max(0)[1].item()]))
+                    for t in range(args.num_steps):
+                        print('> > > step {}'.format(t))
+                        tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2word'][x], y) for x,y in 
+                            zip(questions.tolist()[i], outputs['word_attns'][t].tolist()[i]) 
+                            if x > 0])
+                        print('> ' + tmp)
+                        tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2relation'][x], y) for x,y in 
+                            enumerate(outputs['rel_probs'][t].tolist()[i])])
+                        print('> ' + tmp)
+                        print('> entity: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if outputs['ent_probs'][t][i][_].item() > 0.9])))
+                    print('----')
+                    print('> max is {}'.format(vocab['id2entity'][idx[i].item()]))
+                    print('> golden: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if answers[i][_].item() == 1])))
+                    print('> prediction: {}'.format('; '.join([vocab['id2entity'][_] for _ in range(len(answers[i])) if e_score[i][_].item() > 0.9])))
+                    embed()
     acc = {k:correct[k]/count[k] for k in count}
     result = ' | '.join(['%s:%.4f'%(key, value) for key, value in acc.items()])
     print(result)
@@ -77,6 +76,7 @@ def main():
     parser.add_argument('--num_steps', default=3, type=int)
     parser.add_argument('--dim_word', default=300, type=int)
     parser.add_argument('--dim_hidden', default=1024, type=int)
+    parser.add_argument('--aux_hop', type=int, default=1, choices=[0, 1], help='utilize question hop to constrain the probability of self relation')
     args = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -88,11 +88,18 @@ def main():
     vocab = val_loader.vocab
 
     model = TransferNet(args, args.dim_word, args.dim_hidden, vocab)
-    model.load_state_dict(torch.load(args.ckpt))
+    missing, unexpected = model.load_state_dict(torch.load(args.ckpt), strict=False)
+    if missing:
+        print("Missing keys: {}".format("; ".join(missing)))
+    if unexpected:
+        print("Unexpected keys: {}".format("; ".join(unexpected)))
     model = model.to(device)
     model.kg.Msubj = model.kg.Msubj.to(device)
     model.kg.Mobj = model.kg.Mobj.to(device)
     model.kg.Mrel = model.kg.Mrel.to(device)
+
+    num_params = sum(np.prod(p.size()) for p in model.parameters())
+    print('number of parameters: {}'.format(num_params))
 
     if args.mode == 'vis':
         validate(args, model, val_loader, device, True)

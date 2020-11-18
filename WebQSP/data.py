@@ -134,6 +134,8 @@ def load_data(input_dir, bert_name, batch_size):
             p = rel2id[l[1].strip()]
             o = ent2id[l[2].strip()]
             triples.append((s, p, o))
+            p_rev = rel2id[l[1].strip()+'_reverse']
+            triples.append((o, p_rev, s))
         triples = torch.LongTensor(triples)
 
         train_data = DataLoader(os.path.join(input_dir, 'QA_data/WebQuestionsSP/qa_train_webqsp.txt'), bert_name, ent2id, rel2id, batch_size)

@@ -24,6 +24,8 @@ class TransferNet(nn.Module):
             self.kb_range = torch.LongTensor(pickle.load(f))
             self.kb_desc = torch.LongTensor(pickle.load(f))
 
+        print('number of triples: {}'.format(len(self.kb_pair)))
+
         num_words = len(vocab['word2id'])
         num_entities = len(vocab['entity2id'])
         self.num_steps = args.num_steps
@@ -44,12 +46,8 @@ class TransferNet(nn.Module):
         self.rel_classifier = nn.Linear(dim_hidden, 1)
 
         self.q_classifier = nn.Linear(dim_hidden, num_entities)
+        self.hop_selector = nn.Linear(dim_hidden, self.num_steps)
 
-        # for m in self.modules():
-        #     if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-        #         nn.init.kaiming_normal_(m.weight)
-        #         if m.bias is not None:
-        #             m.bias.data.zero_()
 
     def follow(self, e, pair, p):
         """
@@ -74,7 +72,7 @@ class TransferNet(nn.Module):
         bsz, dim_h = q_embeddings.size()
         last_e = e_s
         word_attns = []
-        ent_probs = [e_s]
+        ent_probs = []
         
         path_infos = [] # [bsz, num_steps]
         for i in range(bsz):
@@ -82,15 +80,12 @@ class TransferNet(nn.Module):
             for j in range(self.num_steps):
                 path_infos[i].append(None)
 
-        if self.training and self.aux_hop:
-            self_acc = []
-            for i in range(bsz):
-                self_acc.append(torch.tensor(0.0).to(device))
-
         for t in range(self.num_steps):
             cq_t = self.step_encoders[t](q_embeddings) # [bsz, dim_h]
             q_logits = torch.sum(cq_t.unsqueeze(1) * q_word_h, dim=2) # [bsz, max_q]
             q_dist = torch.softmax(q_logits, 1).unsqueeze(1) # [bsz, 1, max_q]
+            q_dist = q_dist * questions.ne(0).float().unsqueeze(1)
+            q_dist = q_dist / (torch.sum(q_dist, dim=2, keepdim=True) + 1e-6) # [bsz, 1, max_q]
             word_attns.append(q_dist.squeeze(1))
             ctx_h = (q_dist @ q_word_h).squeeze(1) # [bsz, dim_h]
             ctx_h = ctx_h + cq_t
@@ -100,7 +95,7 @@ class TransferNet(nn.Module):
             for i in range(bsz):
                 # e_idx = torch.topk(last_e[i], k=1, dim=0)[1].tolist() + \
                 #         last_e[i].gt(self.ent_act_thres).nonzero().squeeze(1).tolist()
-                # DOING
+                # TRY
                 # if self.training and t > 0 and random.random() < 0.005:
                 #     e_idx = last_e[i].gt(0).nonzero().squeeze(1).tolist()
                 #     random.shuffle(e_idx)
@@ -122,7 +117,7 @@ class TransferNet(nn.Module):
                 # print(len(e_idx), len(rg))
                 if len(rg) > self.max_active: # limit the number of next-hop
                     rg = rg[:self.max_active]
-                    # DOING
+                    # TRY
                     # rg = rg[torch.randperm(len(rg))[:self.max_active]]
                     cnt_trunc += 1
                     # print('trunc: {}'.format(cnt_trunc))
@@ -144,25 +139,12 @@ class TransferNet(nn.Module):
                 act_desc = [' '.join([self.vocab['id2word'][w] for w in d if w > 0]) for d in desc[act_idx].tolist()]
                 path_infos[i][t] = [(act_pair[_][0], act_desc[_], act_pair[_][1]) for _ in range(len(act_pair))]
 
-                # 
-                if self.training and self.aux_hop:
-                    self_mask = desc[:,0].eq(self.vocab['word2id']['__self_rel__'])
-                    self_prob = d_prob[self_mask]
-                    if len(self_prob) > 0:
-                        self_prob = self_prob.mean()
-                    else:
-                        self_prob = 0
-                    self_acc[i] = self_acc[i] + self_prob
-
-
-            new_e = torch.stack(e_stack, dim=0)
+            last_e = torch.stack(e_stack, dim=0)
 
             # reshape >1 scores to 1 in a differentiable way
-            m = new_e.gt(1).float()
-            z = (m * new_e + (1-m)).detach()
-            new_e = new_e / z
-
-            last_e = new_e
+            m = last_e.gt(1).float()
+            z = (m * last_e + (1-m)).detach()
+            last_e = last_e / z
 
             # Specifically for MetaQA: reshape cycle entities to 0, because A-r->B-r_inv->A is not allowed
             if t > 0:
@@ -178,28 +160,20 @@ class TransferNet(nn.Module):
                             # print('block cycle: {}'.format(' ---> '.join(list(map(str, element)))))
                 last_e = (1-ent_m) * last_e
 
-            ent_probs.append(last_e.detach())
+            ent_probs.append(last_e)
+
+        hop_res = torch.stack(ent_probs, dim=1) # [bsz, num_hop, num_ent]
+        hop_logit = self.hop_selector(q_embeddings)
+        hop_attn = torch.softmax(hop_logit, dim=1) # [bsz, num_hop]
+        last_e = torch.sum(hop_res * hop_attn.unsqueeze(2), dim=1) # [bsz, num_ent]
 
         # Specifically for MetaQA: for 2-hop questions, topic entity is excluded from answer
-        hop2m = torch.zeros((bsz,)).to(device)
-        for i in range(bsz):
-            self_cnt = 0
-            for t in range(self.num_steps):
-                cnt = len([r for (s, r, o) in path_infos[i][t] if r == '__self_rel__'])
-                if len(path_infos[i][t]) > 0 and cnt/len(path_infos[i][t]) > 0.5:
-                    self_cnt += 1
-            if self_cnt == 1:
-                hop2m[i] = 1
-                # print('block 2-hop topic')
-        ent_m = hop2m.unsqueeze(1) * e_s
-        last_e = (1-ent_m) * last_e
+        m = hop_attn.argmax(dim=1).eq(1).float().unsqueeze(1) * e_s
+        last_e = (1-m) * last_e
 
         # question mask, incorporate language bias
         q_mask = torch.sigmoid(self.q_classifier(q_embeddings))
         last_e = last_e * q_mask
-
-
-        ent_probs[-1] = last_e.detach() # use the newest last_e
         
         if not self.training:
             return {
@@ -215,8 +189,7 @@ class TransferNet(nn.Module):
             loss = {'loss_score': loss_score}
 
             if self.aux_hop:
-                self_acc = torch.stack(self_acc)
-                loss_hop = torch.mean(torch.pow(self_acc - (3 - hop.float()), 2))
+                loss_hop = nn.CrossEntropyLoss()(hop_logit, hop-1)
                 loss['loss_hop'] = 0.01 * loss_hop
 
             return loss

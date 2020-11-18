@@ -260,7 +260,7 @@ def main():
     parser.add_argument('--output_dir', required=True, type = str)
     parser.add_argument('--kb_ratio', type=float, default=0, 
         help='How many structured knowledge will be incorporated into textual knowledge. Note they are randomly selected.')
-    parser.add_argument('--add_self', type = int, default = 1, help='whether add self relation, 0 means not')
+    parser.add_argument('--add_self', type = int, default = 0, help='whether add self relation, 0 means not')
 
     parser.add_argument('--min_cnt', type=int, default=5)
     parser.add_argument('--max_desc', type=int, default=16)

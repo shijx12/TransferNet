@@ -1,6 +1,7 @@
 import json
 import pickle
 import torch
+import numpy as np
 from utils.misc import invert_dict
 
 
@@ -14,7 +15,7 @@ def load_vocab(path):
 def collate(batch):
     batch = list(zip(*batch))
     question, topic_entity, answer = list(map(torch.stack, batch[:3]))
-    hop = batch[3]
+    hop = torch.LongTensor(batch[3])
     return question, topic_entity, answer, hop
 
 
@@ -38,13 +39,21 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class DataLoader(torch.utils.data.DataLoader):
-    def __init__(self, vocab_json, question_pt, batch_size, training=False):
+    def __init__(self, vocab_json, question_pt, batch_size, ratio=1, training=False):
         vocab = load_vocab(vocab_json)
         
         inputs = []
         with open(question_pt, 'rb') as f:
             for _ in range(4):
                 inputs.append(pickle.load(f))
+
+        if ratio < 1:
+            total = len(inputs[0])
+            num = int(total * ratio)
+            index = np.random.choice(total, num)
+            print('random select {} of {} (ratio={})'.format(num, total, ratio))
+            inputs = [i[index] for i in inputs]
+
         dataset = Dataset(inputs)
 
         super().__init__(

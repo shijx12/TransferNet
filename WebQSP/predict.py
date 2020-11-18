@@ -85,7 +85,7 @@ def main():
     if unexpected:
         print("Unexpected keys: {}".format("; ".join(unexpected)))
     model = model.to(device)
-    model.triples = model.triples.to(device)
+    # model.triples = model.triples.to(device)
     model.Msubj = model.Msubj.to(device)
     model.Mobj = model.Mobj.to(device)
     model.Mrel = model.Mrel.to(device)

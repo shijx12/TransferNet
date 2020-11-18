@@ -94,8 +94,6 @@ def train(args):
             optimizer.step()
 
             if iteration % (len(train_loader) // 100) == 0:
-            # if True:
-                
                 logging.info(
                     meters.delimiter.join(
                         [
@@ -130,10 +128,10 @@ def main():
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='radam', type = str)
-    parser.add_argument('--aux_hop', action='store_true', help='utilize question hop to constrain the probability of self relation')
     parser.add_argument('--curriculum', default=0, type=int, help='whether use curriculum learning, 0 means not')
     parser.add_argument('--stop_curri_epo', default=3, type=int, help='at which epoch currirulum learning stops')
     # model hyperparameters
+    parser.add_argument('--aux_hop', type=int, default=1, choices=[0, 1], help='utilize question hop to constrain the probability of self relation')
     parser.add_argument('--num_steps', default=3, type=int)
     parser.add_argument('--dim_word', default=300, type=int)
     parser.add_argument('--dim_hidden', default=768, type=int)

@@ -10,7 +10,7 @@ class TransferNet(nn.Module):
         self.args = args
         self.num_steps = 2
         num_relations = len(rel2id)
-        self.triples = triples
+        # self.triples = triples
 
         Tsize = len(triples)
         Esize = len(ent2id)
@@ -21,6 +21,7 @@ class TransferNet(nn.Module):
             torch.stack((idx, triples[:,2])), torch.FloatTensor([1] * Tsize), torch.Size([Tsize, Esize]))
         self.Mrel = torch.sparse.FloatTensor(
             torch.stack((idx, triples[:,1])), torch.FloatTensor([1] * Tsize), torch.Size([Tsize, num_relations]))
+        print('triple size: {}'.format(Tsize))
 
         self.bert_encoder = AutoModel.from_pretrained(args.bert_name, return_dict=True)
         dim_hidden = self.bert_encoder.config.hidden_size
@@ -34,11 +35,7 @@ class TransferNet(nn.Module):
             self.step_encoders.append(m)
             self.add_module('step_encoders_{}'.format(i), m)
 
-        self.rel_classifier = nn.Sequential(
-            nn.Linear(dim_hidden, dim_hidden),
-            nn.ReLU(),
-            nn.Linear(dim_hidden, num_relations)
-            )
+        self.rel_classifier = nn.Linear(dim_hidden, num_relations)
 
         self.hop_selector = nn.Linear(dim_hidden, self.num_steps)
 
@@ -98,7 +95,7 @@ class TransferNet(nn.Module):
                 'hop_attn': hop_attn.squeeze(2)
             }
         else:
-            weight = answers * 9 + 1
-            loss = torch.sum(entity_range * weight * torch.pow(last_e - answers, 2)) / torch.sum(entity_range)
+            weight = answers * 99 + 1
+            loss = torch.sum(entity_range * weight * torch.pow(last_e - answers, 2)) / torch.sum(entity_range * weight)
 
             return {'loss': loss}

@@ -25,7 +25,7 @@ class KnowledgeGraph(nn.Module):
         # self.num_relations = len(self.relation2id)
         self.num_entities = len(self.entity2id)
         # self.relation_embeddings = nn.Embedding(self.num_relations, args.dim_hidden)
-        self.entity_embeddings = nn.Embedding(self.num_entities, args.dim_hidden)
+        # self.entity_embeddings = nn.Embedding(self.num_entities, args.dim_hidden)
         # nn.init.xavier_normal_(self.relation_embeddings.weight)
         # if args.rel:
         #     # print('Loading pretrained relation embeddings')
