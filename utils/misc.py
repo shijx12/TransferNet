@@ -32,13 +32,21 @@ def batch_device(batch, device):
 def idx_to_one_hot(idx, size):
     """
     Args:
-        idx [bsz, 1]
+        idx [bsz, 1] or int or list
     Return:
         one_hot [bsz, size]
     """
-    one_hot = torch.FloatTensor(len(idx), size)
-    one_hot.zero_()
-    one_hot.scatter_(1, idx, 1)
+    if isinstance(idx, int):
+        one_hot = torch.zeros((size,))
+        one_hot[idx] = 1
+    elif isinstance(idx, list):
+        one_hot = torch.zeros((size,))
+        for i in idx:
+            one_hot[i] = 1
+    else:
+        one_hot = torch.FloatTensor(len(idx), size)
+        one_hot.zero_()
+        one_hot.scatter_(1, idx, 1)
     return one_hot
 
 def format_path(path_trace, id2entity, id2relation):

@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 import argparse
 from tqdm import tqdm
 from collections import defaultdict
@@ -17,38 +18,51 @@ def validate(args, model, data, device, verbose = False):
     metrics = defaultdict(int)
     with torch.no_grad():
         for batch in tqdm(data, total=len(data)):
-            for b in batch:
-                outputs = model(*batch_device(b, device))
-                pred = outputs['pred']
-                count += 1
-                update_answer(metrics, pred, b[-1])
+            assert len(batch) == 1
+            batch = batch[0]
+            outputs = model(*batch_device(batch, device))
+            pred = outputs['pred']
+            count += 1
+            update_answer(metrics, pred, batch[-1])
 
-                if verbose:
-                    vocab = data.vocab
-                    origin_entity, entity, kb_pair, kb_desc, kb_range, question, answer_idx, gold_answer = b
-                    print('================================================================')
-                    question_str = ' '.join([vocab['id2word'][_] for _ in question[0].tolist() if _ > 0])
-                    print(question_str)
-                    
-                    for t in range(args.num_steps):
-                        print('>>>>>>>>>> step {} <<<<<<<<<<'.format(t))
-                        tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2word'][x], y) for x,y in 
-                            zip(question[0].tolist(), outputs['word_attns'][t][0].tolist()) 
-                            if x > 0])
-                        print('> ' + tmp)
-                        print('---------')
-                        for path in outputs['path_infos'][t]:
-                            print(path)
-                        print('> active entity:')
-                        for _ in range(len(entity)):
-                            if outputs['ent_probs'][t][_].item() > 0.5:
-                                print('  {}: {}'.format(origin_entity[_], outputs['ent_probs'][t][_].item()))
-                    print('-----------')
-                    print('> golden: {}'.format(gold_answer))
-                    print('> prediction: {}'.format(pred))
-                    embed()
+            if verbose:
+                vocab = data.vocab
+                origin_entity, entity, kb_pair, kb_desc, kb_range, question, answer_idx, gold_answer = b
+                print('================================================================')
+                question_str = ' '.join([vocab['id2word'][_] for _ in question[0].tolist() if _ > 0])
+                print(question_str)
+                
+                for t in range(args.num_steps):
+                    print('>>>>>>>>>> step {} <<<<<<<<<<'.format(t))
+                    tmp = ' '.join(['{}: {:.3f}'.format(vocab['id2word'][x], y) for x,y in 
+                        zip(question[0].tolist(), outputs['word_attns'][t][0].tolist()) 
+                        if x > 0])
+                    print('> ' + tmp)
+                    print('---------')
+                    for path in outputs['path_infos'][t]:
+                        print(path)
+                    print('> active entity:')
+                    for _ in range(len(entity)):
+                        if outputs['ent_probs'][t][_].item() > 0.5:
+                            print('  {}: {}'.format(origin_entity[_], outputs['ent_probs'][t][_].item()))
+                print('-----------')
+                print('> golden: {}'.format(gold_answer))
+                print('> prediction: {}'.format(pred))
+                embed()
     for k in metrics.keys():
         metrics[k] /= count
+
+    if dist.get_world_size() > 1:
+        names = []
+        values = []
+        for k in sorted(metrics.keys()):
+            names.append(k)
+            values.append(metrics[k])
+        values = torch.Tensor(values).to(device)
+        dist.all_reduce(values)
+        values /= dist.get_world_size()
+        metrics = {k: v.item() for k, v in zip(names, values)}
+
     return metrics
 
 

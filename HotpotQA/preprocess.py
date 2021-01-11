@@ -13,15 +13,17 @@ from transformers import BertTokenizer
 from .hotpot_evaluate_v1 import f1_score
 
 import spacy
-nlp = spacy.load('en')
+from spacy.pipeline import EntityRuler
+nlp = spacy.load('en_core_web_lg')
+entity_ruler = EntityRuler(nlp)
+nlp.add_pipe(entity_ruler, before='ner') # must before ner component
 
 from IPython import embed
 
 
-SUB_PH = '__sub__'
-OBJ_PH = '__obj__'
-ENT_PH = '__ent__'
-SELF_PH = '__self__'
+SUB_PH = '_sub_'
+OBJ_PH = '_obj_'
+ENT_PH = '_ent_'
 
 
 tokenizer = None
@@ -37,15 +39,43 @@ def _process_article(inputs):
         # avoid that s is a substring of another token
         return r'(^|(?<=\W))' + re.escape(s) + r'((?=\W)|$)'
 
+    def truncDesc(desc, max_l, center_word):
+        desc = desc.split()
+        if len(desc) > max_l:
+            rm_l = len(desc) - max_l
+            b = len(desc) - 2*desc.index(center_word)
+            if b >= 0:
+                if rm_l <= b:
+                    start = 0
+                else:
+                    start = (rm_l-b)//2
+            else:
+                b = -b
+                if rm_l <= b:
+                    start = rm_l
+                else:
+                    start = b+ (rm_l-b)//2
+            # print(' '.join(desc), ' ---> ', ' '.join(desc[start: start+max_l]))
+            desc = desc[start: start+max_l]
+        return ' '.join(desc)
+
     paragraphs = article['context']
     # some articles in the fullwiki dev/test sets have zero paragraphs
     if len(paragraphs) == 0:
         paragraphs = [['some random title', 'some random stuff']]
 
+    patterns = []
+    for para in paragraphs:
+        # add all title into entity ruler
+        cur_title, cur_para = para[0], para[1]
+        subject = re.sub(r'\(.*\)$', '', cur_title.strip())
+        patterns.append({'label': 'custom', 'pattern': subject})
+    entity_ruler.add_patterns(patterns)
+
     triples = []
     for para in paragraphs:
         cur_title, cur_para = para[0], para[1]
-        subject = re.sub(r'\(.*\)', '', cur_title).strip()
+        subject = re.sub(r'\(.*\)$', '', cur_title.strip())
         sub_pat = re.compile(tokenPat(subject), re.IGNORECASE) # to replace subject with placeholder
         for sent_id, sent in enumerate(cur_para):
             is_sup_fact = (cur_title, sent_id) in sp_set
@@ -54,32 +84,29 @@ def _process_article(inputs):
             for e in nlp(sent).ents:
                 # print(sent)
                 # print(e.text, e.start_char, e.end_char)
-                # TODO filter ents by e.label_
+                if e.label_ in {'ORDINAL'}: # filter ents by e.label_
+                    continue
                 obj = e.text
-                prefix = sent[max(0, e.start_char-args.max_desc//2):e.start_char]
-                prefix = prefix[prefix.find(' ')+1:]
-                suffix = sent[e.end_char: min(len(sent), e.end_char+args.max_desc//2)]
-                suffix = suffix[:suffix.rfind(' ')]
+                prefix = sent[:e.start_char]
+                suffix = sent[e.end_char: ]
                 # forward
+                desc = sub_pat.sub(SUB_PH, prefix, 1) + ' '+OBJ_PH+' ' + sub_pat.sub(SUB_PH, suffix, 1)
                 triples.append((
                     subject,
                     obj,
-                    sub_pat.sub(SUB_PH, prefix, 1) + OBJ_PH + sub_pat.sub(SUB_PH, suffix, 1)
+                    truncDesc(desc, args.max_desc, OBJ_PH)
                     ))
                 # backward
+                desc = sub_pat.sub(OBJ_PH, prefix, 1) + ' '+SUB_PH+' ' + sub_pat.sub(OBJ_PH, suffix, 1)
                 triples.append((
                     obj,
                     subject,
-                    sub_pat.sub(OBJ_PH, prefix, 1) + SUB_PH + sub_pat.sub(OBJ_PH, suffix, 1)
+                    truncDesc(desc, args.max_desc, SUB_PH)
                     ))
     
     entity2id = {}
     for sub, obj, desc in triples:
         add_item_to_x2id(sub, entity2id)
-
-    # add self relation
-    for e in entity2id:
-        triples.append((e, e, SELF_PH))
 
     triples = sorted(triples)
     # print(triples)
@@ -100,17 +127,33 @@ def _process_article(inputs):
     so_pair = [(entity2id[s], entity2id[o]) for s,o,_ in triples]
     descs = [d for _,_,d in triples]
     
-    def _align_to_ent(entities, answer):
+    def _align_to_ent(entities, target):
         max_f1 = -1
         max_ent = None
         for e in entities:
-            f1, p, r = f1_score(e, answer)
+            f1, p, r = f1_score(e, target)
             if f1 > max_f1:
                 max_f1 = f1
                 max_ent = e
         return max_ent, max_f1
 
     question = article['question']
+    # align question topic entities with document entities
+    # note that one question may have multiple topic entities !
+    topic_ents = []
+    print(question, nlp(question).ents)
+    for topic in nlp(question).ents:
+        if topic.label_ in {'ORDINAL'}: # filter ents by e.label_
+            continue
+        e, f1 = _align_to_ent(entity2id.keys(), topic.text)
+        if f1 > 0.5:
+            topic_ents.append(e)
+    if len(topic_ents) == 0:
+        e, f1 = _align_to_ent(entity2id.keys(), question)
+        topic_ents.append(e)
+    topic_ent_idxs = [entity2id[e] for e in topic_ents]
+
+    # align answer with document entities
     if 'answer' in article:
         answer = article['answer']
         align_answer, align_f1 = _align_to_ent(entity2id.keys(), answer)
@@ -138,6 +181,7 @@ def _process_article(inputs):
     descs (list of str) : description of i-th triple
     knowledge_range (list of (int, int)) : triple range of j-th entity
     question (str)
+    topic_ent_idxs (list of int) : aligned index of topic entities
     align_idx (int) : aligned entity index
     answer (str) : real answer
     """
@@ -146,7 +190,8 @@ def _process_article(inputs):
         'kb_pair': so_pair, 
         'kb_desc': descs, 
         'kb_range': knowledge_range, 
-        'question': question, 
+        'question': question,
+        'topic_ent_idxs': topic_ent_idxs,
         'answer_idx': align_idx, 
         'gold_answer': answer
     }
@@ -159,15 +204,16 @@ def main():
     parser.add_argument('--input_dir', default = '/data/sjx/dataset/HotpotQA', type = str)
     parser.add_argument('--output_dir', default = '/data/sjx/exp/TransferNet/HotpotQA/input', type = str)
     
-    parser.add_argument('--max_desc', type=int, default=140)
+    parser.add_argument('--max_desc', type=int, default=32, help='max number of words in description')
+    parser.add_argument('--n_proc', type=int, default=16)
     args = parser.parse_args()
     print(args)
     if not os.path.isdir(args.output_dir):
         os.makedirs(args.output_dir)
 
-    tokenizer_type = 'bert-base-cased'
-    print('Init tokenizer: {}'.format(tokenizer_type))
-    tokenizer = BertTokenizer.from_pretrained(tokenizer_type)
+    # tokenizer_type = 'bert-base-cased'
+    # print('Init tokenizer: {}'.format(tokenizer_type))
+    # tokenizer = BertTokenizer.from_pretrained(tokenizer_type)
 
     # data = json.load(open(os.path.join(args.input_dir, 'hotpot_train_v1.1.json')))
     # embed()
@@ -181,7 +227,7 @@ def main():
         #     docs.append(doc)
 
         # data = data[:1000]
-        with Pool(10) as p:
+        with Pool(args.n_proc) as p:
             docs = list(tqdm(
                 p.imap(_process_article, zip(data, [args]*len(data)), chunksize=4), 
             total=len(data)))
@@ -189,7 +235,7 @@ def main():
         with open(os.path.join(args.output_dir, '{}.pt'.format(split)), 'wb') as f:
             pickle.dump(docs, f)
 
-    embed()
+    # embed()
 
 
 def build_vocab():
@@ -256,5 +302,5 @@ def build_vocab():
         pickle.dump(data, f)
 
 if __name__ == '__main__':
-    # main()
-    build_vocab()
+    main()
+    # build_vocab()
