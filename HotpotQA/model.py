@@ -179,10 +179,7 @@ class TransferNet(nn.Module):
                 ans_loss = torch.sum(weight * torch.pow(last_e - answer_onehot, 2)) / torch.sum(weight)
                 # print(last_e, answer_idx, last_e[answer_idx], ans_loss)
                 # if not can_reach:
-                #     print(gold_answer, origin_entity[answer_idx])
-                #     from IPython import embed; embed()
-                if not can_reach:
-                    print(gold_answer, '|', origin_entity[answer_idx])
+                #     print(gold_answer, '|', origin_entity[answer_idx])
                 bin_target = 0
 
             bin_loss = nn.BCELoss()(binary_prob, torch.zeros_like(binary_prob).fill_(bin_target))

@@ -47,7 +47,7 @@ def train(local_rank, args):
     tokenizer = AutoTokenizer.from_pretrained(args.bert_type)
     train_pt = os.path.join(args.input_dir, 'train.pt')
     val_pt = os.path.join(args.input_dir, 'dev.pt')
-    train_loader = DataLoader(train_pt, tokenizer, 1, training=False, distributed=args.distributed)
+    train_loader = DataLoader(train_pt, tokenizer, 1, training=True, distributed=args.distributed)
     val_loader = DataLoader(val_pt, tokenizer, 1, distributed=args.distributed)
     logger.info('train loader: {}, val loader: {}'.format(len(train_loader), len(val_loader)))
     
@@ -102,7 +102,7 @@ def train(local_rank, args):
         model.train()
         for iteration, batch in enumerate(train_loader):
             iteration = iteration + 1
-            print(iteration)
+            # print(iteration)
             assert len(batch) == 1
             batch = batch[0]
             loss = model(*batch_device(batch, device))

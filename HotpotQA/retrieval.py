@@ -92,13 +92,13 @@ class DataLoader(torch.utils.data.DataLoader):
 
 
 
-def validate(model, val_loader, device):
+def validate(args, model, val_loader, device):
     model.eval()
     recalls = []
     with torch.no_grad():
         for batch in tqdm(val_loader, total=len(val_loader)):
             score, loss = model(batch[0], device)
-            select_idx = score.topk(min(3, len(score)))[1].tolist()
+            select_idx = score.topk(min(args.topk, len(score)))[1].tolist()
             label = batch[0]['labels'].nonzero().squeeze(1).tolist()
             if set(label).issubset(set(select_idx)):
                 recalls.append(1)
@@ -106,7 +106,7 @@ def validate(model, val_loader, device):
                 recalls.append(0)
     recall = sum(recalls) / len(recalls)
 
-    if dist.get_world_size() > 1:
+    if args.distributed:
         recall = torch.Tensor([recall]).to(device)
         dist.all_reduce(recall)
         recall /= dist.get_world_size()
@@ -162,7 +162,7 @@ def train(local_rank, args, dataset, model):
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total)
 
     meters = MetricLogger(delimiter="  ")
-    # recall = validate(model, val_loader, device)
+    # recall = validate(args, model, val_loader, device)
     if local_rank in [-1, 0]:
         # print(recall)
         logging.info('start training, {} batch per gpu'.format(len(train_loader)))
@@ -186,8 +186,8 @@ def train(local_rank, args, dataset, model):
                     scheduler.step()
                     optimizer.zero_grad()
 
-                if local_rank in [-1, 0] and iteration % (len(train_loader) // 100) == 0:
-                # if local_rank in [-1, 0]:
+                # if local_rank in [-1, 0] and iteration % (len(train_loader) // 100) == 0:
+                if local_rank in [-1, 0] and iteration % 10 == 0:
                     logging.info(
                         meters.delimiter.join(
                             [
@@ -201,9 +201,9 @@ def train(local_rank, args, dataset, model):
                             lr=optimizer.param_groups[0]["lr"],
                         )
                     )
-        recall = validate(model, val_loader, device)
-        logging.info(recall)
+        recall = validate(args, model, val_loader, device)
         if local_rank in [-1, 0]:
+            logging.info(recall)
             torch.save(model.state_dict(), os.path.join(args.model_path, 'model_epoch-{}-{:.3f}.pt'.format(epoch, recall)))
 
     dist.destroy_process_group()
@@ -242,11 +242,11 @@ def read_article(inputs):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['train', 'infer'])
+    parser.add_argument('--mode', choices=['train', 'val', 'infer'])
 
     parser.add_argument('--input_dir', default = '/data/sjx/dataset/HotpotQA', type = str)
     parser.add_argument('--model_path', default = '/data/sjx/exp/TransferNet/HotpotQA/retriever', type = str)
-    parser.add_argument('--model_type', default='bert-base-cased', choices=['bert-base-cased', 'roberta-large'])
+    parser.add_argument('--model_type', default='bert-base-cased', choices=['bert-base-cased', 'roberta-large', 'albert-base-v2'])
     parser.add_argument('--n_proc', type=int, default=1)
 
     # training parameters
@@ -260,6 +260,7 @@ def main():
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='adam', type = str)
     parser.add_argument('--warmup_proportion', default=0.1, type = float)
+    parser.add_argument('--topk', default=3, type=int)
 
     # infer parameters
     parser.add_argument('--ckpt_fn', type=str, help='checkpoint file name')
@@ -306,9 +307,24 @@ def main():
         else:
             train(-1, args, dataset, model)
 
-    elif args.mode == 'infer':
+    elif args.mode == 'val':
+        args.distributed = False
         ckpt_fn = os.path.join(args.model_path, args.ckpt_fn)
-        model.load_state_dict(torch.load(ckpt_fn, map_location='cpu'))
+        model.load_state_dict({k.replace('module.',''):v for k,v in torch.load(ckpt_fn, map_location='cpu').items()})
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model = model.to(device)
+
+        tokenizer = AutoTokenizer.from_pretrained(args.model_type)
+        trainset, devset = dataset
+        val_loader = DataLoader(devset, tokenizer, distributed=False)
+
+        recall = validate(args, model, val_loader, device)
+        print(recall)
+
+    elif args.mode == 'infer':
+        args.distributed = False
+        ckpt_fn = os.path.join(args.model_path, args.ckpt_fn)
+        model.load_state_dict({k.replace('module.',''):v for k,v in torch.load(ckpt_fn, map_location='cpu').items()})
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         model = model.to(device)
 
@@ -321,9 +337,9 @@ def main():
         for phase, dataloader in zip(('train', 'dev'), (train_loader, val_loader)):
             print('phase {}'.format(phase))
             select = []
-            for batch in tqdm(train_loader):
+            for batch in tqdm(dataloader):
                 score, loss = model(batch[0], device)
-                select_idx = score.topk(min(3, len(score)))[1].tolist()
+                select_idx = score.topk(min(args.topk, len(score)))[1].tolist()
                 select.append(select_idx)
             results.append(select)
 

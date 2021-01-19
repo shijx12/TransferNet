@@ -29,7 +29,7 @@ ENT_PH = '_ent_'
 tokenizer = None
 
 def _process_article(inputs):
-    article, args = inputs
+    article, args, selected_idx = inputs
     if 'supporting_facts' in article:
         sp_set = set(list(map(tuple, article['supporting_facts'])))
     else:
@@ -73,7 +73,10 @@ def _process_article(inputs):
     entity_ruler.add_patterns(patterns)
 
     triples = []
-    for para in paragraphs:
+    for idx, para in enumerate(paragraphs):
+        if selected_idx and idx not in selected_idx:
+            continue
+
         cur_title, cur_para = para[0], para[1]
         subject = re.sub(r'\(.*\)$', '', cur_title.strip())
         sub_pat = re.compile(tokenPat(subject), re.IGNORECASE) # to replace subject with placeholder
@@ -203,6 +206,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_dir', default = '/data/sjx/dataset/HotpotQA', type = str)
     parser.add_argument('--output_dir', default = '/data/sjx/exp/TransferNet/HotpotQA/input', type = str)
+    parser.add_argument('--preselect_file', type=str, help='if provided, should be the file of selected idx')
     
     parser.add_argument('--max_desc', type=int, default=32, help='max number of words in description')
     parser.add_argument('--n_proc', type=int, default=16)
@@ -218,9 +222,15 @@ def main():
     # data = json.load(open(os.path.join(args.input_dir, 'hotpot_train_v1.1.json')))
     # embed()
 
+    selected_idx = {}
+    if args.preselect_file:
+        select = json.load(open(args.preselect_file))
+        selected_idx = { 'train':select[0], 'dev':select[1] }
+
     for split, fn in (('train', 'hotpot_train_v1.1.json'), ('dev', 'hotpot_dev_distractor_v1.json')):
         data = json.load(open(os.path.join(args.input_dir, fn)))
         print('number of {}: {}'.format(split, len(data)))
+        select = selected_idx.get(split, [None]*len(data))
         # docs = []
         # for i in tqdm(range(100)):
         #     doc = _process_article(data[i], args)
@@ -229,7 +239,7 @@ def main():
         # data = data[:1000]
         with Pool(args.n_proc) as p:
             docs = list(tqdm(
-                p.imap(_process_article, zip(data, [args]*len(data)), chunksize=4), 
+                p.imap(_process_article, zip(data, [args]*len(data), select), chunksize=4), 
             total=len(data)))
 
         with open(os.path.join(args.output_dir, '{}.pt'.format(split)), 'wb') as f:
