@@ -26,6 +26,8 @@ def batch_device(batch, device):
             for k in x:
                 if isinstance(x[k], torch.Tensor):
                     x[k] = x[k].to(device)
+        elif isinstance(x, (list, tuple)) and isinstance(x[0], torch.Tensor):
+            x = list(map(lambda i: i.to(device), x))
         res.append(x)
     return res
 

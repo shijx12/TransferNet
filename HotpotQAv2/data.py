@@ -13,32 +13,35 @@ class Dataset(torch.utils.data.Dataset):
     def __init__(self, data, tokenizer):
         self.data = data
         self.tokenizer = tokenizer
+        self.max_length = self.tokenizer.model_max_length
 
     def __getitem__(self, index):
         entity = self.data[index]['entity']
-        origin_entity = entity
-        entity = self.tokenizer(entity, padding=True, return_tensors="pt")
+        ent_pos = self.data[index]['ent_pos']
+        for i in range(len(ent_pos)):
+            ent_pos[i] = torch.LongTensor(ent_pos[i]) # each row means (p_idx, start, end)
+            ent_pos[i][ent_pos[i] >= self.max_length] = self.max_length - 1 # avoid exceeding max_length
 
-        kb_pair = self.data[index]['kb_pair']
-        kb_pair = torch.LongTensor(kb_pair)
+        pair_so = self.data[index]['pair_so']
+        pair_pos = self.data[index]['pair_pos']
+        pair_so = torch.LongTensor(pair_so)
+        pair_pos = torch.LongTensor(pair_pos) # each row means (p_idx, sub_start, sub_end, obj_start, obj_end)
+        pair_pos[pair_pos >= self.max_length] = self.max_length - 1
 
-        kb_desc = self.data[index]['kb_desc']
-        kb_desc = self.tokenizer(kb_desc, padding=True, return_tensors="pt")
-
-        kb_range = self.data[index]['kb_range']
-        kb_range = torch.LongTensor(kb_range)
+        paragraphs = self.data[index]['paragraphs']
+        paragraphs = self.tokenizer(paragraphs, padding=True, truncation=True, return_tensors="pt")
 
         question = self.data[index]['question']
         question_type = self.data[index]['question_type']
         question = self.tokenizer(question, padding=True, return_tensors="pt")
 
-        topic_ent_idxs = self.data[index]['topic_ent_idxs']
+        topic_ent_idxs = self.data[index]['topic_ent_idxs'] # idx in entity, not in paragraphs!
         topic_ent_desc = self.data[index]['topic_ent_desc']
-        topic_ent_desc = self.tokenizer(topic_ent_desc, padding=True, return_tensors="pt")
+        topic_ent_desc = self.tokenizer(topic_ent_desc, padding=True, truncation=True, return_tensors="pt")
 
         answer_idx = self.data[index]['answer_idx']
         gold_answer = self.data[index]['gold_answer']
-        return origin_entity, entity, kb_pair, kb_desc, kb_range, question, question_type, topic_ent_idxs, topic_ent_desc, answer_idx, gold_answer
+        return entity, ent_pos, pair_so, pair_pos, paragraphs, question, question_type, topic_ent_idxs, topic_ent_desc, answer_idx, gold_answer
 
 
     def __len__(self):

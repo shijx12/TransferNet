@@ -10,7 +10,7 @@ import re
 from multiprocessing import Pool
 
 from transformers import BertTokenizer
-from .hotpot_evaluate_v1 import f1_score
+from .hotpot_evaluate_v1 import f1_score, normalize_answer
 
 import spacy
 from spacy.pipeline import EntityRuler
@@ -68,17 +68,19 @@ def _process_article(inputs):
     for para in paragraphs:
         # add all title into entity ruler
         cur_title, cur_para = para[0], para[1]
-        subject = re.sub(r'\(.*\)$', '', cur_title.strip())
+        subject = re.sub(r'\(.*\)$', '', cur_title.strip()).strip()
         patterns.append({'label': 'custom', 'pattern': subject})
     entity_ruler.add_patterns(patterns)
 
     triples = []
+    entity_description = {}
     for idx, para in enumerate(paragraphs):
         if selected_idx and idx not in selected_idx:
             continue
 
         cur_title, cur_para = para[0], para[1]
-        subject = re.sub(r'\(.*\)$', '', cur_title.strip())
+        subject = re.sub(r'\(.*\)$', '', cur_title.strip()).strip()
+        entity_description[normalize_answer(subject)] = ' '.join(cur_para)
         sub_pat = re.compile(tokenPat(subject), re.IGNORECASE) # to replace subject with placeholder
         for sent_id, sent in enumerate(cur_para):
             is_sup_fact = (cur_title, sent_id) in sp_set
@@ -89,21 +91,24 @@ def _process_article(inputs):
                 # print(e.text, e.start_char, e.end_char)
                 if e.label_ in {'ORDINAL'}: # filter ents by e.label_
                     continue
+                if normalize_answer(e.text) == normalize_answer(subject):
+                    continue
+
                 obj = e.text
                 prefix = sent[:e.start_char]
                 suffix = sent[e.end_char: ]
                 # forward
                 desc = sub_pat.sub(SUB_PH, prefix, 1) + ' '+OBJ_PH+' ' + sub_pat.sub(SUB_PH, suffix, 1)
                 triples.append((
-                    subject,
-                    obj,
+                    normalize_answer(subject), # normalize entities for better alignment
+                    normalize_answer(obj),
                     truncDesc(desc, args.max_desc, OBJ_PH)
                     ))
                 # backward
                 desc = sub_pat.sub(OBJ_PH, prefix, 1) + ' '+SUB_PH+' ' + sub_pat.sub(OBJ_PH, suffix, 1)
                 triples.append((
-                    obj,
-                    subject,
+                    normalize_answer(obj),
+                    normalize_answer(subject),
                     truncDesc(desc, args.max_desc, SUB_PH)
                     ))
     
@@ -144,7 +149,7 @@ def _process_article(inputs):
     # align question topic entities with document entities
     # note that one question may have multiple topic entities !
     topic_ents = []
-    print(question, nlp(question).ents)
+    # print(question, nlp(question).ents)
     for topic in nlp(question).ents:
         if topic.label_ in {'ORDINAL'}: # filter ents by e.label_
             continue
@@ -156,26 +161,29 @@ def _process_article(inputs):
         topic_ents.append(e)
     topic_ent_idxs = [entity2id[e] for e in topic_ents]
 
+    # collect description of topic entity
+    topic_ent_desc = [entity_description.get(e, 'padding padding') for e in topic_ents]
+
     # align answer with document entities
+    question_type = -1
+    align_idx, answer = None, None
     if 'answer' in article:
         answer = article['answer']
-        align_answer, align_f1 = _align_to_ent(entity2id.keys(), answer)
-        align_idx = entity2id[align_answer]
-    else:
-        align_idx, answer = None, None
-    
-    # TODO yes/no questions
-    # print('{}; {}; {}'.format(align_answer, answer, align_f1))
-    # if answer in ['yes', 'no', 'noanswer']:
-    #     print(question)
+        if answer in {'yes', 'no'}:
+            question_type = 0 # predict yes/no according to each topic_ent_desc
+            print(0, question)
+        elif normalize_answer(answer) in topic_ents and len(topic_ents) == 2:
+            question_type = 1 # given two topic entities, predict one of them, indicated by align_idx
+            align_idx = 0 if normalize_answer(answer)==topic_ents[0] else 1
+            print(1, question, topic_ents[align_idx], answer)
+        else:
+            question_type = 2 # predict from all entities
+            align_answer, align_f1 = _align_to_ent(entity2id.keys(), answer)
+            align_idx = entity2id[align_answer] 
+
 
     id2entity = {v:k for k,v in entity2id.items()}
     entities = [id2entity[i] for i in range(len(id2entity))]
-
-    # tokenize sequences
-    # token_entities = tokenizer(entities, padding=True, return_tensors="pt")
-    # token_descs = tokenizer(descs, padding=True, return_tensors="pt")
-    # token_question = tokenizer(question, padding=True, return_tensors="pt")
 
     # TODO supporting fact
     """
@@ -184,7 +192,9 @@ def _process_article(inputs):
     descs (list of str) : description of i-th triple
     knowledge_range (list of (int, int)) : triple range of j-th entity
     question (str)
+    question_type (int) : 0, 1, 2
     topic_ent_idxs (list of int) : aligned index of topic entities
+    topic_ent_desc (list of str) : description of topic entities
     align_idx (int) : aligned entity index
     answer (str) : real answer
     """
@@ -194,7 +204,9 @@ def _process_article(inputs):
         'kb_desc': descs, 
         'kb_range': knowledge_range, 
         'question': question,
+        'question_type': question_type,
         'topic_ent_idxs': topic_ent_idxs,
+        'topic_ent_desc': topic_ent_desc,
         'answer_idx': align_idx, 
         'gold_answer': answer
     }

@@ -44,7 +44,11 @@ def train(local_rank, args):
             device = 'cuda'
     else:
         device = 'cpu'
-    tokenizer = AutoTokenizer.from_pretrained(args.bert_type)
+    logger.info('====== Note the bert type ({}) must be consistent with preprocess ======'.format(args.bert_type))
+    tokenizer = AutoTokenizer.from_pretrained(args.bert_type, additional_special_tokens=['[left]', '[right]'])
+    args.tokenizer = tokenizer
+    logger.info('max sequence length: {}'.format(tokenizer.model_max_length))
+
     train_pt = os.path.join(args.input_dir, 'train.pt')
     val_pt = os.path.join(args.input_dir, 'dev.pt')
     train_loader = DataLoader(train_pt, tokenizer, 1, training=True, distributed=args.distributed, keep_type=args.keep_type)
@@ -185,7 +189,7 @@ def main():
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--weight_decay', default=1e-5, type=float)
     parser.add_argument('--num_epoch', default=10, type=int)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=8,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--opt', default='radam', type = str)
