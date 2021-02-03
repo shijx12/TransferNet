@@ -31,9 +31,7 @@ def find_ent_position(para_token_ids, e, tokenizer):
                 return i, i+len(short_list)-1
         return -1, -1
 
-    e_token_ids = tokenizer.encode(e, add_special_tokens=False)
-    e_token_ids = tokenizer.encode('[left]', add_special_tokens=False) + \
-                e_token_ids + tokenizer.encode('[right]', add_special_tokens=False)
+    e_token_ids = tokenizer.encode('[left] ' + e.strip() + ' [right]', add_special_tokens=False)
     return find_sub_list(para_token_ids, e_token_ids)
 
 
@@ -101,11 +99,8 @@ def process_article(inputs):
         new_para += para[last_pos:]
         new_para = ' '.join(new_para.strip().split())
         paragraphs[i] = new_para
-        # print(para)
-        # print(new_para)
-        # for t in tokenizer(new_para)['input_ids']:
-        #     print(tokenizer.decode(t))
-
+    # Some entity may change after split+join, such as 'at \xa015'. We make ent_name and new_para consistent.
+    ent_name_before_norm = [' '.join(e.strip().split()) for e in ent_name_before_norm]
 
     # tokenize paragraphs, collect the index of entity
     ent_pos = [[] for _ in entity2id]
@@ -238,16 +233,16 @@ def main():
         data = json.load(open(os.path.join(args.input_dir, fn)))
         print('number of {}: {}'.format(split, len(data)))
         select = selected_idx.get(split, [None]*len(data))
-        # docs = []
-        # for i in tqdm(range(100)):
-        #     doc = process_article(data[i], args)
-        #     docs.append(doc)
-
-        # data = data[:1000]
-        with Pool(args.n_proc) as p:
-            docs = list(tqdm(
-                p.imap(process_article, zip(data, [args]*len(data), select), chunksize=4), 
-            total=len(data)))
+        if args.n_proc == 1:
+            docs = []
+            for i in tqdm(range(len(data))):
+                doc = process_article((data[i], args, select[i]))
+                docs.append(doc)
+        else:
+            with Pool(args.n_proc) as p:
+                docs = list(tqdm(
+                    p.imap(process_article, zip(data, [args]*len(data), select), chunksize=4), 
+                total=len(data)))
 
         with open(os.path.join(args.output_dir, '{}.pt'.format(split)), 'wb') as f:
             pickle.dump(docs, f)

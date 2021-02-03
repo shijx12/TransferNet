@@ -199,10 +199,9 @@ def main():
                              "See details at https://nvidia.github.io/apex/amp.html")
     # model hyperparameters
     parser.add_argument('--bert_type', default='albert-base-v2', choices=['bert-base-cased', 'albert-base-v2'])
-    parser.add_argument('--num_steps', default=2, type=int)
+    parser.add_argument('--num_steps', default=3, type=int)
     parser.add_argument('--dim_word', default=300, type=int)
     parser.add_argument('--dim_hidden', default=768, type=int)
-    parser.add_argument('--max_act', default=30, type=int, help='maximum number of activated edge per step')
     parser.add_argument('--keep_type', default=-1, type=int, help='keep only one question type, -1 means all')
     args = parser.parse_args()
 

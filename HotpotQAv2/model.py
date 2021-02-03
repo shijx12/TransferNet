@@ -212,8 +212,10 @@ class TransferNet(nn.Module):
                 ent_probs.append(last_e)
 
             hop_res = torch.stack(ent_probs, dim=0) # [num_hop, num_ent]
-            hop_attn = torch.softmax(self.hop_selector(q_emb), dim=1) # [1, num_hop]
-            last_e = torch.mm(hop_attn, hop_res).squeeze(0) # [num_ent]
+            hop_attn = torch.softmax(self.hop_selector(q_emb), dim=1).squeeze() # [num_hop]
+            hop_attn = hop_attn * torch.Tensor([0,1,1]).to(device) # mask the 0-th hop
+            hop_attn = hop_attn / hop_attn.sum()
+            last_e = torch.mm(hop_attn.view(1,-1), hop_res).squeeze(0) # [num_ent]
 
             if self.training:
                 answer_onehot = idx_to_one_hot(answer_idx, len(last_e)).to(device)
