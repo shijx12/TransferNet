@@ -138,7 +138,7 @@ def load_data(input_dir, bert_name, batch_size):
             triples.append((o, p_rev, s))
         triples = torch.LongTensor(triples)
 
-        train_data = DataLoader(os.path.join(input_dir, 'QA_data/WebQuestionsSP/qa_train_webqsp.txt'), bert_name, ent2id, rel2id, batch_size)
+        train_data = DataLoader(os.path.join(input_dir, 'QA_data/WebQuestionsSP/qa_train_webqsp.txt'), bert_name, ent2id, rel2id, batch_size, training=True)
         test_data = DataLoader(os.path.join(input_dir, 'QA_data/WebQuestionsSP/qa_test_webqsp.txt'), bert_name, ent2id, rel2id, batch_size)
     
         with open(cache_fn, 'wb') as fp:

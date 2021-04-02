@@ -180,9 +180,6 @@ class TransferNet(nn.Module):
 
                 if t == 0:
                     last_e = torch.softmax(self.sim_classifier(ent_emb * ctx_h).squeeze(1), dim=0) # (#ent)
-
-                    if not self.training:
-                        path_infos[t] = [entity[last_e.argmax(0).item()]]
                 else:
                     pair_prob = torch.sigmoid(self.sim_classifier(pair_emb * ctx_h).squeeze(1)) # (#pair,)
                     last_e = self.follow(last_e, pair_so, pair_prob)
@@ -213,8 +210,8 @@ class TransferNet(nn.Module):
 
             hop_res = torch.stack(ent_probs, dim=0) # [num_hop, num_ent]
             hop_attn = torch.softmax(self.hop_selector(q_emb), dim=1).squeeze() # [num_hop]
-            hop_attn = hop_attn * torch.Tensor([0,1,1]).to(device) # mask the 0-th hop
-            hop_attn = hop_attn / hop_attn.sum()
+            # hop_attn = hop_attn * torch.Tensor([0,1,1]).to(device) # mask the 0-th hop
+            # hop_attn = hop_attn / hop_attn.sum()
             last_e = torch.mm(hop_attn.view(1,-1), hop_res).squeeze(0) # [num_ent]
 
             if self.training:

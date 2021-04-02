@@ -117,6 +117,9 @@ def process_article(inputs):
             start, end = find_ent_position(para_token_ids, e, tokenizer)
             if start == -1:
                 continue
+            if start >= len(para_token_ids):
+                print('why the start index exceeds paragraph length')
+                continue
             # assert tokenizer.decode(para_token_ids[start])=='[left]' and tokenizer.decode(para_token_ids[end])=='[end]'
             if (i, start, end) not in ent_pos[e_id]:
                 ent_pos[e_id].append((i, start, end)) # 文档序号，[left]位置，[right]位置
