@@ -22,7 +22,7 @@ torch.set_num_threads(1) # avoid using multiple cpus
 def train(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    ent2id, rel2id, train_loader, val_loader, test_loader = load_data(args.input_dir, args.bert_name, args.batch_size)
+    ent2id, rel2id, train_loader, val_loader, test_loader = load_data(args.input_dir, args.bert_name, args.batch_size, args.rev)
     logging.info("Create model.........")
     model = TransferNet(args, ent2id, rel2id)
     if not args.ckpt == None:
@@ -112,9 +112,10 @@ def main():
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--warmup_proportion', default=0.1, type = float)
     # model parameters
+    parser.add_argument('--rev', action='store_true', help='whether add reversed relations')
     parser.add_argument('--num_ways', default=1, type=int)
     parser.add_argument('--num_steps', default=2, type=int)
-    parser.add_argument('--bert_name', default='bert-base-cased', choices=['roberta-base', 'bert-base-uncased'])
+    parser.add_argument('--bert_name', default='bert-base-cased', choices=['roberta-base', 'bert-base-cased', 'bert-base-uncased'])
     args = parser.parse_args()
 
     # make logging.info display into both shell and file

@@ -17,10 +17,11 @@ class TransferNet(nn.Module):
 
         self.step_encoders = {}
         self.hop_selectors = {}
+        self.rel_classifiers = {}
         for i in range(self.num_ways):
             for j in range(self.num_steps):
                 m = nn.Sequential(
-                    nn.Linear(dim_hidden, dim_hidden),
+                    nn.Linear(dim_hidden*2, dim_hidden),
                     nn.Tanh()
                 )
                 name = 'way_{}_step_{}'.format(i, j)
@@ -31,8 +32,9 @@ class TransferNet(nn.Module):
             self.hop_selectors['way_{}'.format(i)] = m
             self.add_module('hop-way_{}'.format(i), m)
 
-
-        self.rel_classifier = nn.Linear(dim_hidden, num_relations)
+            m = nn.Linear(dim_hidden, num_relations)
+            self.rel_classifiers['way_{}'.format(i)] = m
+            self.add_module('rel-way_{}'.format(i), m)
         
 
 
@@ -43,13 +45,16 @@ class TransferNet(nn.Module):
         device = heads.device
 
         e_score = []
+        last_h = torch.zeros_like(q_embeddings)
         for w in range(self.num_ways):
             last_e = heads
             word_attns = []
             rel_probs = []
             ent_probs = []
             for t in range(self.num_steps):
-                cq_t = self.step_encoders['way_{}_step_{}'.format(w, t)](q_embeddings) # [bsz, dim_h]
+                cq_t = self.step_encoders['way_{}_step_{}'.format(w, t)](
+                    torch.cat((q_embeddings, last_h), dim=1) # consider history
+                ) # [bsz, dim_h]
                 q_logits = torch.sum(cq_t.unsqueeze(1) * q_word_h, dim=2) # [bsz, max_q]
                 q_dist = torch.softmax(q_logits, 1) # [bsz, max_q]
                 q_dist = q_dist * questions['attention_mask'].float()
@@ -57,8 +62,9 @@ class TransferNet(nn.Module):
                 word_attns.append(q_dist)
                 ctx_h = (q_dist.unsqueeze(1) @ q_word_h).squeeze(1) # [bsz, dim_h]
                 ctx_h = ctx_h + cq_t
+                last_h = ctx_h
 
-                rel_logit = self.rel_classifier(ctx_h) # [bsz, num_relations]
+                rel_logit = self.rel_classifiers['way_{}'.format(w)](ctx_h) # [bsz, num_relations]
                 # rel_dist = torch.softmax(rel_logit, 1) # bad
                 rel_dist = torch.sigmoid(rel_logit)
                 rel_probs.append(rel_dist)
