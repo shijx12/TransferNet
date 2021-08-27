@@ -66,7 +66,6 @@ def get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_ste
 
 class CustomDecayLR(object):
     '''
-    自定义学习率变化机制
         Example:
         >>> scheduler = CustomDecayLR(optimizer)
         >>> for epoch in range(100):
@@ -95,7 +94,6 @@ class CustomDecayLR(object):
 
 class BertLR(object):
     '''
-    Bert模型内定的学习率变化机制
     Example:
         >>> scheduler = BertLR(optimizer)
         >>> for epoch in range(100):
@@ -114,7 +112,6 @@ class BertLR(object):
         self.t_total = t_total
         self.warmup = warmup
 
-    # 线性预热方式
     def warmup_linear(self,x, warmup=0.002):
         if x < warmup:
             return x / warmup
@@ -127,7 +124,6 @@ class BertLR(object):
 
 class CyclicLR(object):
     '''
-    Cyclical learning rates for training neural networks
     Example:
         >>> scheduler = CyclicLR(optimizer)
         >>> for epoch in range(100):
@@ -500,7 +496,6 @@ class CosineLRWithRestarts(object):
 
 class NoamLR(object):
     '''
-    主要参考论文<< Attention Is All You Need>>中的学习更新方式
     Example:
         >>> scheduler = NoamLR(d_model,factor,warm_up,optimizer)
         >>> for epoch in range(100):

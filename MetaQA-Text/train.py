@@ -16,7 +16,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(me
 logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
 rootLogger = logging.getLogger()
 
-from IPython import embed
 torch.set_num_threads(1) # avoid using multiple cpus
 
 

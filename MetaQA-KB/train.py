@@ -7,7 +7,7 @@ import argparse
 import shutil
 from tqdm import tqdm
 import time
-from utils.misc import MetricLogger, load_glove, idx_to_one_hot, UseStyle, RAdam
+from utils.misc import MetricLogger, load_glove, idx_to_one_hot, RAdam
 from .data import DataLoader
 from .model import TransferNet
 from .predict import validate
@@ -16,7 +16,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(me
 logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
 rootLogger = logging.getLogger()
 
-from IPython import embed
 torch.set_num_threads(1) # avoid using multiple cpus
 
 

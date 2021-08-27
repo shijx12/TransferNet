@@ -40,7 +40,7 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class DataLoader(torch.utils.data.DataLoader):
-    def __init__(self, fn, bert_name, ent2id, rel2id, batch_size, training=False):
+    def __init__(self, input_dir, fn, bert_name, ent2id, rel2id, batch_size, training=False):
         print('Reading questions from {}'.format(fn))
         self.tokenizer = AutoTokenizer.from_pretrained(bert_name)
         self.ent2id = ent2id
@@ -52,7 +52,7 @@ class DataLoader(torch.utils.data.DataLoader):
 
         sub_map = defaultdict(list)
         so_map = defaultdict(list)
-        for line in open('/data/sjx/exp/TransferNet/WebQSP/data/fbwq_full/train.txt'):
+        for line in open(os.path.join(input_dir, 'fbwq_full/train.txt')):
             l = line.strip().split('\t')
             s = l[0].strip()
             p = l[1].strip()
@@ -138,25 +138,10 @@ def load_data(input_dir, bert_name, batch_size):
             triples.append((o, p_rev, s))
         triples = torch.LongTensor(triples)
 
-        train_data = DataLoader(os.path.join(input_dir, 'QA_data/WebQuestionsSP/qa_train_webqsp.txt'), bert_name, ent2id, rel2id, batch_size, training=True)
-        test_data = DataLoader(os.path.join(input_dir, 'QA_data/WebQuestionsSP/qa_test_webqsp.txt'), bert_name, ent2id, rel2id, batch_size)
+        train_data = DataLoader(input_dir, os.path.join(input_dir, 'QA_data/WebQuestionsSP/qa_train_webqsp.txt'), bert_name, ent2id, rel2id, batch_size, training=True)
+        test_data = DataLoader(input_dir, os.path.join(input_dir, 'QA_data/WebQuestionsSP/qa_test_webqsp.txt'), bert_name, ent2id, rel2id, batch_size)
     
         with open(cache_fn, 'wb') as fp:
             pickle.dump((ent2id, rel2id, triples, train_data, test_data), fp)
 
     return ent2id, rel2id, triples, train_data, test_data
-
-
-
-if __name__ == '__main__':
-    sub_map = defaultdict(list)
-    so_map = defaultdict(list)
-    for line in open('/data/sjx/exp/TransferNet/WebQSP/data/fbwq_full/train.txt'):
-        l = line.strip().split('\t')
-        s = l[0].strip()
-        p = l[1].strip()
-        o = l[2].strip()
-        sub_map[s].append((p, o))
-        so_map[(s, o)].append(p)
-    from IPython import embed; embed()
-

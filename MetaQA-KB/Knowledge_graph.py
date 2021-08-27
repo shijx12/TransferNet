@@ -22,22 +22,5 @@ class KnowledgeGraph(nn.Module):
         self.Msubj = torch.sparse.FloatTensor(Msubj.t(), torch.FloatTensor([1] * Tsize), torch.Size([Tsize, Esize]))
         self.Mobj = torch.sparse.FloatTensor(Mobj.t(), torch.FloatTensor([1] * Tsize), torch.Size([Tsize, Esize]))
         self.Mrel = torch.sparse.FloatTensor(Mrel.t(), torch.FloatTensor([1] * Tsize), torch.Size([Tsize, Rsize]))
-        # self.num_relations = len(self.relation2id)
         self.num_entities = len(self.entity2id)
-        # self.relation_embeddings = nn.Embedding(self.num_relations, args.dim_hidden)
-        # self.entity_embeddings = nn.Embedding(self.num_entities, args.dim_hidden)
-        # nn.init.xavier_normal_(self.relation_embeddings.weight)
-        # if args.rel:
-        #     # print('Loading pretrained relation embeddings')
-        #     pretrained = torch.load('/data/csl/exp/AI_project/Bucket/pretrained_rel/transe_metaqa.ckpt')
-        #     pretrained = pretrained['rel_embeddings.weight'].cpu().numpy()
-        #     # self.relation_embeddings.weight.data[:1].fill_(0)
-        #     self.relation_embeddings.weight.data.copy_(torch.from_numpy(pretrained))
-    
-    @property
-    def dummy_e(self):
-        return DUMMY_ENTITY_ID
-    
-    # @property
-    # def dummy_r(self):
-    #     return DUMMY_RELATION_ID
+ 

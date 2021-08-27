@@ -11,11 +11,7 @@ import transformers
 DUMMY_RELATION = 'DUMMY_RELATION'
 DUMMY_ENTITY = 'DUMMY_ENTITY'
 
-DUMMY_RELATION_ID = 0
 DUMMY_ENTITY_ID = 0
-
-EPSILON = float(np.finfo(float).eps)
-HUGE_INT = 1e31
 
 def batch_device(batch, device):
     res = []
@@ -51,44 +47,6 @@ def idx_to_one_hot(idx, size):
         one_hot.scatter_(1, idx, 1)
     return one_hot
 
-def format_path(path_trace, id2entity, id2relation):
-    def get_most_recent_relation(j):
-        relation_id = int(path_trace[j][0])
-        if relation_id == NO_OP_RELATION_ID:
-            return '<null>'
-        else:
-            return id2relation[relation_id]
-
-    def get_most_recent_entity(j):
-        return id2entity[int(path_trace[j][1])]
-
-    path_str = get_most_recent_entity(0)
-    for j in range(1, len(path_trace)):
-        rel = get_most_recent_relation(j)
-        if not rel.endswith('_inv'):
-            path_str += ' '+ UseStyle('-{}->'.format(rel), back = 'blue') + ' '
-        else:
-            path_str += ' ' + UseStyle('<-{}-'.format(rel[:-4]), back = 'green') + ' '
-        path_str += get_most_recent_entity(j)
-    return path_str
-
-def pad_and_cat(a, padding_value, padding_dim=1):
-    max_dim_size = max([x.size()[padding_dim] for x in a])
-    padded_a = []
-    for x in a:
-        if x.size()[padding_dim] < max_dim_size:
-            res_len = max_dim_size - x.size()[1]
-            pad = nn.ConstantPad1d((0, res_len), padding_value)
-            padded_a.append(pad(x))
-        else:
-            padded_a.append(x)
-    return torch.cat(padded_a, dim=0)
-
-def safe_log(x):
-    return torch.log(x + EPSILON)
-
-def entropy(p):
-    return torch.sum(- p * safe_log(p), 1)
 
 def init_word2id():
     return {
@@ -99,10 +57,6 @@ def init_word2id():
 def init_entity2id():
     return {
         DUMMY_ENTITY: DUMMY_ENTITY_ID
-    }
-def init_relation2id():
-    return {
-        DUMMY_RELATION: DUMMY_RELATION_ID
     }
 
 def add_item_to_x2id(item, x2id):
@@ -130,23 +84,6 @@ def load_glove(glove_pt, idx_to_token):
     matrix = np.asarray(matrix)
     return matrix
 
-def tile_along_beam(v, beam_size, dim=0):
-    """
-    Tile a tensor along a specified dimension for the specified beam size.
-    :param v: Input tensor.
-    :param beam_size: Beam size.
-    """
-    if dim == -1:
-        dim = len(v.size()) - 1
-    v = v.unsqueeze(dim + 1)
-    v = torch.cat([v] * beam_size, dim=dim+1)
-    new_size = []
-    for i, d in enumerate(v.size()):
-        if i == dim + 1:
-            new_size[-1] *= d
-        else:
-            new_size.append(d)
-    return v.view(new_size)
 
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
@@ -296,62 +233,3 @@ class RAdam(Optimizer):
                     p.data.copy_(p_data_fp32)
 
         return loss
-
-
-
-STYLE = {
-        'fore':
-        {   # 前景色
-            'black'    : 30,   #  黑色
-            'red'      : 31,   #  红色
-            'green'    : 32,   #  绿色
-            'yellow'   : 33,   #  黄色
-            'blue'     : 34,   #  蓝色
-            'purple'   : 35,   #  紫红色
-            'cyan'     : 36,   #  青蓝色
-            'white'    : 37,   #  白色
-        },
-
-        'back' :
-        {   # 背景
-            'black'     : 40,  #  黑色
-            'red'       : 41,  #  红色
-            'green'     : 42,  #  绿色
-            'yellow'    : 43,  #  黄色
-            'blue'      : 44,  #  蓝色
-            'purple'    : 45,  #  紫红色
-            'cyan'      : 46,  #  青蓝色
-            'white'     : 47,  #  白色
-        },
-
-        'mode' :
-        {   # 显示模式
-            'mormal'    : 0,   #  终端默认设置
-            'bold'      : 1,   #  高亮显示
-            'underline' : 4,   #  使用下划线
-            'blink'     : 5,   #  闪烁
-            'invert'    : 7,   #  反白显示
-            'hide'      : 8,   #  不可见
-        },
-
-        'default' :
-        {
-            'end' : 0,
-        },
-}
-
-def UseStyle(string, mode = None, fore = None, back = None):
-
-    mode  = '%s' % STYLE['mode'][mode]  if mode else ''
-
-    fore  = '%s' % STYLE['fore'][fore] if fore else ''
-
-    back  = '%s' % STYLE['back'][back] if back else ''
-
-    style = ';'.join([s for s in [mode, fore, back] if s])
-
-    style = '\033[%sm' % style if style else ''
-
-    end   = '\033[%sm' % STYLE['default']['end'] if style else ''
-
-    return '%s%s%s' % (style, string, end)

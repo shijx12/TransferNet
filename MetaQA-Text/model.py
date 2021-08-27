@@ -6,7 +6,6 @@ import math
 import random
 
 from utils.BiGRU import GRU, BiGRU
-from IPython import embed
 
 class TransferNet(nn.Module):
     def __init__(self, args, vocab):
