@@ -52,7 +52,7 @@ class DataLoader(torch.utils.data.DataLoader):
 
         sub_map = defaultdict(list)
         so_map = defaultdict(list)
-        for line in open(os.path.join(input_dir, 'fbwq_full/train.txt')):
+        for line in open(os.path.join(input_dir, 'fbwq_full/train.txt'), encoding='utf-8'):
             l = line.strip().split('\t')
             s = l[0].strip()
             p = l[1].strip()
@@ -77,7 +77,7 @@ class DataLoader(torch.utils.data.DataLoader):
             question_2 = question_2[1]
             # question = question_1 + 'NE' + question_2
             question = question_1.strip()
-            ans = line[1].split('|')
+            ans = line[1].strip().split('|')
 
 
             # if (head, ans[0]) not in so_map:
@@ -92,7 +92,14 @@ class DataLoader(torch.utils.data.DataLoader):
 
             head = [ent2id[head]]
             question = self.tokenizer(question.strip(), max_length=64, padding='max_length', return_tensors="pt")
-            ans = [ent2id[a] for a in ans]
+            # ans = [ent2id[a] for a in ans]
+            ############################################
+            ans1 = []
+            for a in ans:
+                if ent2id.get(a) is not None:
+                    ans1.append(ent2id[a])
+            ans = list(filter(lambda x: x is not None, ans1))
+            ############################################
             data.append([head, question, ans, entity_range])
 
         print('data number: {}'.format(len(data)))
@@ -117,7 +124,7 @@ def load_data(input_dir, bert_name, batch_size):
     else:
         print('Read data...')
         ent2id = {}
-        for line in open(os.path.join(input_dir, 'fbwq_full/entities.dict')):
+        for line in open(os.path.join(input_dir, 'fbwq_full/entities.dict'), encoding='utf-8'):
             l = line.strip().split('\t')
             ent2id[l[0].strip()] = len(ent2id)
         # print(len(ent2id))
@@ -128,7 +135,7 @@ def load_data(input_dir, bert_name, batch_size):
             rel2id[l[0].strip()] = int(l[1])
 
         triples = []
-        for line in open(os.path.join(input_dir, 'fbwq_full/train.txt')):
+        for line in open(os.path.join(input_dir, 'fbwq_full/train.txt'), encoding='utf-8'):
             l = line.strip().split('\t')
             s = ent2id[l[0].strip()]
             p = rel2id[l[1].strip()]
